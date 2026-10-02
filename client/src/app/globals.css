@@ -1,0 +1,149 @@
+@import 'tailwindcss';
+
+/**
+ * Tailwind v4 theme wiring.
+ *
+ * This file contains variable NAMES ONLY — never a literal colour, size or radius. Every value
+ * comes from src/theme/tokens.ts, which ThemeStyles emits as CSS custom properties on :root.
+ * `@theme inline` tells Tailwind to generate utilities that reference those variables directly
+ * (rather than copying their values), so switching to dark mode re-points the same utility.
+ *
+ * That indirection is the whole point of ARCHITECTURE section 13.1: one file to change the look.
+ */
+@theme inline {
+  /* surfaces */
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-muted: var(--color-surface-muted);
+  --color-surface-hover: var(--color-surface-hover);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+
+  /* text */
+  --color-fg: var(--color-fg);
+  --color-fg-muted: var(--color-fg-muted);
+  --color-fg-subtle: var(--color-fg-subtle);
+  --color-fg-on-accent: var(--color-fg-on-accent);
+
+  /* accent */
+  --color-primary: var(--color-primary);
+  --color-primary-hover: var(--color-primary-hover);
+  --color-primary-fg: var(--color-primary-fg);
+  --color-primary-subtle: var(--color-primary-subtle);
+  --color-focus-ring: var(--color-focus-ring);
+
+  /* quote verification */
+  --color-verified: var(--color-verified);
+  --color-verified-bg: var(--color-verified-bg);
+  --color-verified-border: var(--color-verified-border);
+  --color-unverified: var(--color-unverified);
+  --color-unverified-bg: var(--color-unverified-bg);
+  --color-unverified-border: var(--color-unverified-border);
+
+  /* feedback */
+  --color-danger: var(--color-danger);
+  --color-danger-bg: var(--color-danger-bg);
+  --color-danger-border: var(--color-danger-border);
+  --color-warning: var(--color-warning);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-success: var(--color-success);
+  --color-success-bg: var(--color-success-bg);
+
+  /* comparison severity */
+  --color-severity-high: var(--color-severity-high);
+  --color-severity-high-bg: var(--color-severity-high-bg);
+  --color-severity-medium: var(--color-severity-medium);
+  --color-severity-medium-bg: var(--color-severity-medium-bg);
+  --color-severity-low: var(--color-severity-low);
+  --color-severity-low-bg: var(--color-severity-low-bg);
+
+  /* document status */
+  --color-status-uploaded: var(--color-status-uploaded);
+  --color-status-processing: var(--color-status-processing);
+  --color-status-ready: var(--color-status-ready);
+  --color-status-failed: var(--color-status-failed);
+
+  /* citation highlighting */
+  --color-highlight: var(--color-highlight);
+  --color-highlight-active: var(--color-highlight-active);
+  --color-highlight-border: var(--color-highlight-border);
+
+  /* diffs */
+  --color-diff-insert: var(--color-diff-insert);
+  --color-diff-insert-bg: var(--color-diff-insert-bg);
+  --color-diff-delete: var(--color-diff-delete);
+  --color-diff-delete-bg: var(--color-diff-delete-bg);
+
+  /* typography */
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--font-mono);
+
+  --text-display: var(--text-display);
+  --text-h1: var(--text-h1);
+  --text-h2: var(--text-h2);
+  --text-h3: var(--text-h3);
+  --text-body: var(--text-body);
+  --text-small: var(--text-small);
+  --text-caption: var(--text-caption);
+  --text-document: var(--text-document);
+
+  /* radii and shadows */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-card: var(--radius-card);
+  --radius-pill: var(--radius-pill);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-popover: var(--shadow-popover);
+  --shadow-modal: var(--shadow-modal);
+  --shadow-focus: var(--shadow-focus);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Colour is never the only signal, but a visible focus ring is non-negotiable. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-primary-subtle);
+  }
+
+  /* Respect a user who has asked for less motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@utility scrollbar-slim {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}

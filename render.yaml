@@ -1,0 +1,89 @@
+# Render blueprint — ARCHITECTURE.md section 15.
+#
+# Both services use the REPO ROOT as their root directory, because the single
+# package-lock.json and the shared/ workspace live there.
+#
+# Secrets are NOT in this file. Every value marked `sync: false` must be set in the Render
+# dashboard for that service (CLAUDE.md rule 5). No .env is ever deployed.
+services:
+  # ---------------------------------------------------------------- API (NestJS)
+  - type: web
+    name: contract-analyzer-server
+    runtime: node
+    region: singapore
+    plan: starter # paid: free instances sleep after 15 min and would kill in-flight jobs
+    rootDir: .
+    buildCommand: npm ci && npx turbo run build --filter=@ca/server...
+    # Migrations run as their own step, not inside the app process, so two instances
+    # starting at once cannot race each other (decision D15).
+    preDeployCommand: npm run prisma:deploy -w @ca/server
+    startCommand: npm run start:prod -w @ca/server
+    healthCheckPath: /health/ready
+    # A client-only change must not redeploy the API.
+    buildFilter:
+      paths:
+        - server/**
+        - shared/**
+        - package.json
+        - package-lock.json
+        - turbo.json
+        - tsconfig.base.json
+    envVars:
+      - key: NODE_VERSION
+        value: 22.17.1
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      # Render injects PORT per service; it overrides SERVER_PORT (decision D24).
+      - key: WEB_ORIGIN
+        sync: false # the client service's URL, no trailing slash
+      - key: DATABASE_URL
+        sync: false # Supabase SESSION pooler, :5432, with sslmode=no-verify (D30)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: contracts
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_MAX_INPUT_TOKENS
+        value: '12000'
+      - key: LLM_TPM_BUDGET
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: '25'
+      - key: MAX_PAGES
+        value: '300'
+
+  # ------------------------------------------------------------- Web (Next.js)
+  - type: web
+    name: contract-analyzer-client
+    runtime: node
+    region: singapore
+    plan: starter
+    rootDir: .
+    buildCommand: npm ci && npx turbo run build --filter=@ca/client...
+    startCommand: npm run start -w @ca/client
+    buildFilter:
+      paths:
+        - client/**
+        - shared/**
+        - package.json
+        - package-lock.json
+        - turbo.json
+        - tsconfig.base.json
+    envVars:
+      - key: NODE_VERSION
+        value: 22.17.1
+      - key: NODE_ENV
+        value: production
+      # Inlined at BUILD time (decision D18): changing this needs a client REBUILD,
+      # not just a restart.
+      - key: NEXT_PUBLIC_API_URL
+        sync: false # the server service's URL, no trailing slash

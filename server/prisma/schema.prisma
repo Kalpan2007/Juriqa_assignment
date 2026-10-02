@@ -1,0 +1,290 @@
+// Data model — ARCHITECTURE.md section 2.
+//
+// Offsets into Document.fullText are the backbone (principle 3): pages, chunks, quotes,
+// highlights, comparisons and redlines all point into that one string by character offset.
+// Nothing here stores a second copy of document text that could drift from it.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+// Prisma 7 removed `url` from the datasource block: the connection string for Migrate now
+// lives in prisma.config.ts, and the runtime client is given a driver adapter instead
+// (@prisma/adapter-pg). See ARCHITECTURE.md section 1 "Runtime, module system and version pins".
+datasource db {
+  provider = "postgresql"
+}
+
+enum DocumentKind {
+  PDF
+  DOCX
+}
+
+enum DocumentStatus {
+  UPLOADED
+  EXTRACTING
+  INDEXING
+  READY
+  FAILED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum MessageStatus {
+  STREAMING
+  DONE
+  STOPPED
+  ERROR
+}
+
+enum AnswerStatus {
+  ANSWERED
+  NOT_FOUND
+  UNSUPPORTED
+  PARTIAL
+}
+
+enum RetrievalMode {
+  RETRIEVAL
+  THOROUGH
+}
+
+enum QuoteStatus {
+  VERIFIED
+  UNVERIFIED
+}
+
+/// How the verifier found the quote. Four passes, ARCHITECTURE section 5 + decision D6.
+enum MatchKind {
+  EXACT_WS
+  HYPHEN_BREAK
+  WS_INSENSITIVE
+  CASE_INSENSITIVE
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+model Document {
+  id       String       @id @default(uuid()) @db.Uuid
+  /// Original filename, display only — never used to build a storage key.
+  name     String
+  kind     DocumentKind
+  sizeBytes Int
+  /// Duplicate detection; also the comparison cache key (decision D19).
+  sha256   String
+
+  status       DocumentStatus @default(UPLOADED)
+  /// e.g. "Extracting page 42 of 150"
+  statusDetail String?
+  errorCode    String?
+  errorMessage String?
+
+  pageCount Int?
+  /// Pages with no readable text — drives the partial-scan warning (decision D10).
+  scannedPageCount Int @default(0)
+
+  /// documents/<id>/original.<ext>
+  storageKey String
+  /// DOCX only: server-sanitised mammoth HTML with data-start/data-end on every block.
+  html     String? @db.Text
+  /// THE source of truth for every offset in the system.
+  fullText String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pages             Page[]
+  chunks            Chunk[]
+  chatDocuments     ChatDocument[]
+  quotes            Quote[]
+  redlines          Redline[]
+  comparisonsAsBase    Comparison[] @relation("ComparisonBase")
+  comparisonsAsRevised Comparison[] @relation("ComparisonRevised")
+
+  @@index([status])
+  @@index([sha256])
+  @@index([createdAt])
+}
+
+/// PDF: one row per real page. DOCX: a single virtual page covering the whole text.
+model Page {
+  id         String   @id @default(uuid()) @db.Uuid
+  documentId String   @db.Uuid
+  number     Int
+  startOffset Int
+  endOffset   Int
+  width      Float?
+  height     Float?
+  /// Readable characters on this page.
+  textChars  Int      @default(0)
+  /// textChars < 10 — the page is almost certainly a scan (decision D10).
+  isScanned  Boolean  @default(false)
+  /// Compact arrays [start, end, x, y, w, h, eol]; `str` is NOT stored (decision D20).
+  items      Json?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, number])
+  @@index([documentId, number])
+}
+
+model Chunk {
+  id         String  @id @default(uuid()) @db.Uuid
+  documentId String  @db.Uuid
+  ordinal    Int
+  heading    String?
+  /// e.g. "4.2", "Article IV" — kept separate from the body so renumbering is invisible (D7).
+  clauseRef  String?
+  startOffset Int
+  endOffset   Int
+  tokenCount Int
+  text       String  @db.Text
+  /// Repeated headers/footers: excluded from retrieval and comparison.
+  isBoilerplate Boolean @default(false)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  // `tsv` is a GENERATED tsvector column with a GIN index, added in a SQL migration —
+  // Prisma cannot express generated columns, so it is deliberately absent here. Full-text
+  // queries run as raw SQL in chunk-search.repository.ts.
+
+  @@unique([documentId, ordinal])
+  @@index([documentId, ordinal])
+  @@index([documentId, isBoilerplate])
+}
+
+model Chat {
+  id    String  @id @default(uuid()) @db.Uuid
+  /// Set by the server from the first question, <= 60 chars (decision D21).
+  title String?
+  createdAt DateTime @default(now())
+  /// Bumped on every message; the history list is ordered by this (decision D21).
+  updatedAt DateTime @updatedAt
+
+  documents ChatDocument[]
+  messages  Message[]
+
+  @@index([updatedAt])
+}
+
+/// Joins a chat to its documents and fixes the alias the prompt uses ("D1", "D2", ...).
+model ChatDocument {
+  id         String @id @default(uuid()) @db.Uuid
+  chatId     String @db.Uuid
+  documentId String @db.Uuid
+  alias      String
+
+  chat     Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, documentId])
+  @@unique([chatId, alias])
+  @@index([documentId])
+}
+
+model Message {
+  id      String        @id @default(uuid()) @db.Uuid
+  chatId  String        @db.Uuid
+  role    MessageRole
+  content String        @db.Text
+  status  MessageStatus @default(DONE)
+  /// Derived once the answer completes. A STOPPED message is PARTIAL, never UNSUPPORTED (D11).
+  answerStatus AnswerStatus?
+  mode    RetrievalMode @default(RETRIEVAL)
+  /// { mode, chunksRead, chunksTotal, sectionsCovered, pagesCovered, complete, skippedPages }
+  coverage Json?
+  errorCode String?
+  usage    Json?
+  createdAt DateTime @default(now())
+
+  chat   Chat    @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  quotes Quote[]
+
+  @@index([chatId, createdAt])
+  @@index([status])
+}
+
+/// A quote the model produced, with OUR verdict on whether it really exists in that document.
+model Quote {
+  id         String      @id @default(uuid()) @db.Uuid
+  messageId  String      @db.Uuid
+  /// Null only when the model attributed the quote to an unknown document alias.
+  documentId String?     @db.Uuid
+  /// The [n] marker in the answer text.
+  citation   Int
+  text       String      @db.Text
+  status     QuoteStatus
+  /// Every occurrence found: [{ start, end }, ...]. Never a position the model reported.
+  matches    Json?
+  matchKind  MatchKind?
+
+  message  Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  document Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([messageId])
+  @@index([documentId])
+}
+
+model Comparison {
+  id                String    @id @default(uuid()) @db.Uuid
+  baseDocumentId    String    @db.Uuid
+  revisedDocumentId String    @db.Uuid
+  /// Cache key (decision D19): the same two files + the same algorithm = the same result.
+  baseSha256        String
+  revisedSha256     String
+  algorithmVersion  Int       @default(1)
+  status            JobStatus @default(PENDING)
+  errorCode         String?
+  result            Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  base    Document @relation("ComparisonBase", fields: [baseDocumentId], references: [id], onDelete: Cascade)
+  revised Document @relation("ComparisonRevised", fields: [revisedDocumentId], references: [id], onDelete: Cascade)
+
+  @@unique([baseSha256, revisedSha256, algorithmVersion])
+  @@index([status])
+}
+
+model Redline {
+  id          String    @id @default(uuid()) @db.Uuid
+  documentId  String    @db.Uuid
+  instruction String    @db.Text
+  status      JobStatus @default(PENDING)
+  errorCode   String?
+  /// Proposed edits with their locator status and rejection reason.
+  edits       Json?
+  /// Storage key of the produced .docx, set only after the self-check passes.
+  outputKey   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, createdAt])
+}
+
+/// One row per LLM call — token and latency visibility, i.e. cost control (section 3.5).
+model LlmCall {
+  id           String   @id @default(uuid()) @db.Uuid
+  purpose      String
+  model        String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  latencyMs    Int      @default(0)
+  ok           Boolean  @default(true)
+  errorCode    String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([purpose])
+}

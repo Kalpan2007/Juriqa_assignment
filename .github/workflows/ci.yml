@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A new push to the same branch cancels the previous run — no point burning minutes on a
+# commit that has already been superseded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Read from .node-version so CI, Render and the laptop cannot drift (D4).
+          node-version-file: '.node-version'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      # The Prisma client is generated code and is gitignored, so typecheck needs it first.
+      # No database is touched: `generate` reads schema.prisma only.
+      - name: Generate Prisma client
+        run: npm run prisma:generate -w @ca/server
+        env:
+          # prisma.config.ts requires the variable to be present; it is never connected to.
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?sslmode=no-verify
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      # Catches anything that only breaks in a production build (RSC boundaries, Tailwind).
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?sslmode=no-verify
+          NEXT_PUBLIC_API_URL: http://localhost:3001
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # CLAUDE.md rule 5 and the assignment both treat a committed key as a hard failure,
+      # so it is checked mechanically rather than by remembering.
+      #
+      # The patterns match the SHAPE OF A REAL VALUE, never a variable name: a scan for
+      # "service_role" matches the placeholder `your_service_role_key` in .env.example and
+      # fails on a clean repo, which trains everyone to ignore the check. Files that are
+      # supposed to describe secrets are excluded for the same reason.
+      - name: Check no secrets were committed
+        run: |
+          PATTERNS='gsk_[A-Za-z0-9]{30,}|eyJhbGciOi[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}'
+          if git log -p --all -- . \
+               ':(exclude).env.example' \
+               ':(exclude)docs/**' \
+               ':(exclude).github/**' \
+             | grep -nE "$PATTERNS"; then
+            echo "::error::A credential appears in the git history."
+            exit 1
+          fi
+          echo "No credentials found in history."
+
+      # A real postgres password, as opposed to the placeholder in .env.example.
+      - name: Check no database URL with a password was committed
+        run: |
+          if git log -p --all -- . ':(exclude).env.example' ':(exclude)docs/**' \
+             | grep -nE "postgres(ql)?://[A-Za-z0-9._%-]+:[^@/ ]+@[A-Za-z0-9.-]+\.(supabase|amazonaws)" ; then
+            echo "::error::A database connection string with credentials appears in the history."
+            exit 1
+          fi
+          echo "No database credentials found in history."
+
+      - name: Check .env is not tracked
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env is tracked by git."
+            exit 1
+          fi
+          echo ".env is not tracked."

@@ -5,7 +5,7 @@ you are working on — it is the source of truth for design, folder layout, edge
 out-of-scope behaviour.
 - `docs/ASSIGNMENT.md` — original requirements
 - `docs/ARCHITECTURE.md` — how every feature is built (follow it; propose changes, don't drift)
-- `docs/BUILD_PLAN.md` — phase order and acceptance checks
+- `docs/BUILD_PLAN.md` — feature slices (F0–F9), build order and acceptance checks
 - `docs/NOTES.md` — running log of what was built, decisions and limitations (you append to it)
 
 ## Product in one paragraph
@@ -49,6 +49,11 @@ Both `client/src` and `server/src` are **feature-first**:
 - PDF: `pdfjs-dist` at the SAME pinned version in server and client. DOCX: mammoth (view/text),
   jszip + @xmldom/xmldom + diff (redline).
 - Deploy: Render (`server` + `client` services, Singapore) + Supabase (Singapore) + Groq.
+- **Pinned versions — never install these without the exact version:** Node 22.17.1,
+  `@nestjs/*` 11.2.x (CommonJS, not 12), `prisma` / `@prisma/client` / `@prisma/adapter-pg` 7.10.0,
+  `pg-boss` 11.1.2, `pdfjs-dist` 6.3.289 (same in client and server). `shared/` builds to `dist`.
+- Pre-build review decisions D1–D23 are in ARCHITECTURE.md section 17 — they override anything
+  older you may assume.
 
 ## Code standards
 **General**
@@ -82,15 +87,17 @@ Both `client/src` and `server/src` are **feature-first**:
 - Unit tests for every `domain/` folder, `shared/src/text`, and `client/src/features/viewer/lib`.
 - LLM always mocked. Fixtures in `server/test/fixtures/`.
 
-## How to work (every phase)
-1. Read the phase in `docs/BUILD_PLAN.md` and the matching ARCHITECTURE.md sections.
+## How to work (every slice)
+1. Read the slice in `docs/BUILD_PLAN.md` and the matching ARCHITECTURE.md sections.
 2. Produce a plan: files to create/change (with their feature folder), why, and which ✓ edge cases
    you will cover.
 3. Implement. Tests alongside (tests FIRST for verification, redline, comparison detectors).
 4. Run `npm run typecheck`, `npm run lint`, `npm test`. Fix until green.
 5. Report honestly: what works, what was checked, what is not done. Never say "should work".
 6. Append to `docs/NOTES.md`: what was built, decisions, known limitations.
-7. Do not build anything outside the current phase, and no extras unless asked.
+7. Do not build anything outside the current slice, and no extras unless asked.
+8. Build each slice top to bottom: `shared/` contract → server domain → server service/controller
+   → client api/hooks → client components. A slice is not done until it works in the browser.
 
 ## Commands
 - `npm install` — always from the repo ROOT (one package-lock.json at the root)

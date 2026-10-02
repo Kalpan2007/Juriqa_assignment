@@ -48,7 +48,7 @@ Every feature section has the same shape:
          ▼                    ▼                        ▼
    Supabase Postgres    Supabase Storage          Groq API
    (data + FTS +        (original files,          (OpenAI-compatible,
-    pg-boss queue)       redlined .docx)           gpt-oss-20b)
+    pg-boss queue)       redlined .docx)           model from LLM_MODEL)
 
  shared/   — zod contracts used by BOTH client and server (DTOs, SSE events, error codes, text rules)
 ```
@@ -300,15 +300,15 @@ small pure functions both sides must agree on.
 | Concern | Choice | Reason |
 |---|---|---|
 | Package manager | npm workspaces + Turborepo | Ships with Node; one root lockfile; turbo caches builds |
-| Server framework | NestJS 11 (Express adapter) | Modules/DI, the team's strongest stack |
+| Server framework | NestJS **11.2.x** (Express adapter, CommonJS) | Modules/DI; v12 is ESM-only and nestjs ecosystem lags |
 | Validation | zod schemas from `@ca/shared` + Nest ZodValidationPipe | One schema for server + client |
-| ORM | Prisma | Typed queries, migrations |
+| ORM | Prisma **7.10.0** (pinned exactly; `latest` tag is an 8.x RC) | Typed queries, migrations |
 | Database | Supabase Postgres (Session pooler URL) | Managed Postgres, FTS, pgvector later |
 | Files | Supabase Storage, private bucket `contracts` | Render disk is ephemeral |
-| Queue | pg-boss (Postgres-backed) | Durable jobs + retries without Redis |
+| Queue | pg-boss **11.1.2** (last CommonJS release) | Durable jobs + retries without Redis |
 | LLM | Groq via `openai` SDK with `baseURL` | OpenAI-compatible, fast, cheap |
-| PDF | `pdfjs-dist` (same pinned version in server + client) | Text items align with text layer |
-| DOCX view/text | `mammoth` → HTML | Clean HTML for reading view |
+| PDF | `pdfjs-dist` **6.3.289**, exact same pin in server + client | Text items align with text layer |
+| DOCX view/text | `mammoth` → HTML → `sanitize-html` (server-side) | Clean, safe HTML for reading view |
 | DOCX redline | `jszip` + `@xmldom/xmldom` + `diff` | Direct OOXML editing |
 | Logging | `nestjs-pino` | Structured logs with request ids |
 | Rate limiting | `@nestjs/throttler` | Protect the public demo's LLM budget |
@@ -323,6 +323,45 @@ small pure functions both sides must agree on.
 - Tests next to the feature in `__tests__/`, named `<file>.test.ts`.
 - Hooks start with `use`, live in the feature's `hooks/`.
 - Path aliases instead of deep relative imports (`@/features/chat`, not `../../../features/chat`).
+
+### Runtime, module system and version pins
+- **Node 22.17.1** everywhere (laptop, CI, Render): `.nvmrc` + `.node-version` at the root, and
+  `"engines": { "node": ">=22.13 <23" }` (pdfjs-dist needs ≥ 22.13).
+- **Pin exact versions** for: `@nestjs/*` 11.2.x, `prisma` + `@prisma/client` + `@prisma/adapter-pg`
+  7.10.0, `pg-boss` 11.1.2, `pdfjs-dist` 6.3.289 (client and server identical). Never `npm i <pkg>`
+  without a version for these — `latest` points at incompatible majors or release candidates.
+- **Server is CommonJS** (`"type": "commonjs"`) with `module`/`moduleResolution: "nodenext"`, so
+  `await import()` is preserved as a real dynamic import. ESM-only libraries (`pdfjs-dist`) are
+  loaded with `await import('pdfjs-dist/legacy/build/pdf.mjs')` inside one adapter file, never with
+  a top-level `require`.
+- pdf.js on the server is given `standardFontDataUrl` (and `cMapUrl`, `cMapPacked: true`) pointing
+  at `node_modules/pdfjs-dist/standard_fonts/` and `/cmaps/`, resolved from
+  `require.resolve('pdfjs-dist/package.json')`, so fonts load in Node instead of warning.
+  **Verified against 6.3.289 — two v6 API details that cost time if missed:**
+  1. Those options must be a **filesystem path with FORWARD SLASHES and a trailing `/`**.
+     Build them with `path.join(pkgDir, 'standard_fonts').split(path.sep).join('/') + '/'`
+     (correct on Linux too, where `path.sep` is already `/`). All three forms were tried:
+     a native Windows path throws `Invalid factory url: "...\" must include trailing slash`,
+     and a `file://` URL fails to load the font because Node's `fetch` has no `file:` support
+     (`Unable to load font data at: file:///...`). Only the forward-slash path works.
+     Note that `getTextContent()` never loads a font, so this only surfaces on
+     `getOperatorList()` / canvas rendering — the F0 smoke script calls it deliberately so the
+     check is not vacuous.
+  2. **`PDFDocumentProxy.destroy()` no longer exists.** Keep the object returned by `getDocument()`
+     (the loading task) and call `loadingTask.destroy()` when finished; `doc.cleanup()` and
+     `page.cleanup()` exist for freeing memory between pages. The worker must release every
+     document, or a 150-page job leaks.
+  Confirmed working: `await import()` of `pdfjs-dist/legacy/build/pdf.mjs` from CommonJS on
+  Node 22.17.1, returning `str`, `hasEOL`, `width`, `height` and `transform` per item with no
+  warnings — i.e. everything the separator rules in section 4 and the geometric fallback in
+  section 8 depend on.
+- Prisma 7 follows the current Supabase + Prisma 7 guide: `prisma.config.ts` for the datasource URL
+  and `@prisma/adapter-pg` at runtime.
+- **`shared/` ships compiled output**: `tsc` builds CommonJS JS + `.d.ts` into `shared/dist`;
+  `package.json` `main`/`types`/`exports` point at `dist`. Turbo: every `build`, `typecheck`, `test`
+  and `dev` task `dependsOn: ["^build"]`; `npm run dev` also runs `tsc -w` for shared. Server and
+  client both consume `dist` (no `transpilePackages` needed). Shared contains no Node- or
+  browser-only APIs.
 
 ---
 
@@ -340,6 +379,7 @@ Document
   errorCode     string?           e.g. SCANNED_PDF, ENCRYPTED_PDF, CORRUPT_FILE
   errorMessage  string?           user-readable
   pageCount     int?
+  scannedPageCount int  default 0 pages with no readable text (partial-scan warning)
   storageKey    string            documents/<id>/original.<ext>
   html          text?             DOCX only: mammoth HTML with data-block offsets
   fullText      text?             THE source of truth for offsets
@@ -347,30 +387,38 @@ Document
 
 Page            (PDF: real pages. DOCX: one virtual page.)
   documentId, number, startOffset, endOffset, width?, height?
-  items         json              PDF: [{ i, str, start, end, x, y, w, h, eol }]
+  textChars     int               readable characters on this page
+  isScanned     bool              true when the page has (almost) no readable text
+  items         json              PDF, compact arrays: [[start, end, x, y, w, h, eol], ...]
+                                  (str is NOT stored — it is fullText.slice(start, end))
 
 Chunk
   documentId, ordinal, heading?, clauseRef?, startOffset, endOffset, tokenCount, text,
   isBoilerplate bool
   tsv           tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED  + GIN index
 
-Chat            id, title, createdAt
+Chat            id, title (first question, ≤ 60 chars, set by server), createdAt, updatedAt
+                (updatedAt bumped on every message; history list ordered by it)
 ChatDocument    chatId, documentId, alias ("D1", "D2"...)          (multi-doc support)
 
 Message
   chatId, role USER | ASSISTANT, content, status STREAMING | DONE | STOPPED | ERROR,
+  answerStatus ANSWERED | NOT_FOUND | UNSUPPORTED | PARTIAL | null,
   mode RETRIEVAL | THOROUGH, coverage json, errorCode?, usage json?, createdAt
 
 Quote
   messageId, documentId, citation int, text, status VERIFIED | UNVERIFIED,
-  matches json [{ start, end }], matchKind EXACT_WS | WS_INSENSITIVE | null
+  matches json [{ start, end }],
+  matchKind EXACT_WS | HYPHEN_BREAK | WS_INSENSITIVE | CASE_INSENSITIVE | null
 
-Comparison      id, baseDocumentId, revisedDocumentId, status, result json, createdAt
+Comparison      id, baseDocumentId, revisedDocumentId, baseSha256, revisedSha256,
+                algorithmVersion, status, result json, createdAt
+                UNIQUE (baseSha256, revisedSha256, algorithmVersion) = the cache key
 Redline         id, documentId, instruction, status, edits json, outputKey?, createdAt
 LlmCall         purpose, model, inputTokens, outputTokens, latencyMs, ok, errorCode, createdAt
 ```
 Indexes: `Chunk(documentId, ordinal)`, `Message(chatId, createdAt)`, `Quote(messageId)`,
-`Document(status)`, GIN on `Chunk.tsv`. Cascade deletes from Document to Page/Chunk.
+`Document(status)`, `Chat(updatedAt)`, `Page(documentId, number)`, GIN on `Chunk.tsv`. Cascade deletes from Document to Page/Chunk.
 pg-boss lives in its own schema (`pgboss`).
 
 ---
@@ -386,22 +434,52 @@ pg-boss lives in its own schema (`pgboss`).
 
 ### 3.2 Configuration
 Env validated at boot with zod; the server refuses to start if anything is missing or malformed.
-Server: `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BUCKET`,
-`LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_MAX_INPUT_TOKENS`, `LLM_TPM_BUDGET`,
-`WEB_ORIGIN`, `MAX_UPLOAD_MB`, `MAX_PAGES`.
-Client: `NEXT_PUBLIC_API_URL` only. The client holds no secrets.
+
+**Server:** `NODE_ENV`, `SERVER_PORT`, `LOG_LEVEL`, `DATABASE_URL`, `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_BUCKET`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`,
+`LLM_MAX_INPUT_TOKENS`, `LLM_TPM_BUDGET`, `WEB_ORIGIN`, `MAX_UPLOAD_MB` (default 25),
+`MAX_PAGES` (default 300).
+**Client:** `NEXT_PUBLIC_API_URL` only. The client holds no secrets.
+
+**One `.env` at the repo root** (not one per workspace), so there is a single file to fill in:
+- `.env.example` at the root documents every variable for both sides; `cp .env.example .env`.
+- The server loads it with `ConfigModule({ envFilePath: ['<repo root>/.env'] })`.
+- The client loads it in `next.config.ts` (`dotenv` reading `../.env`) before Next reads
+  `process.env`, so `NEXT_PUBLIC_*` is still inlined normally.
+- `.env` is for LOCAL development only. On Render, every variable is set in the service's
+  Environment settings and no `.env` file is deployed.
+
+**Ports:** the server's port is `SERVER_PORT` (default 3001), never `PORT`, because a single root
+`.env` is shared by both apps and a lone `PORT` would collide. The server reads
+`process.env.PORT ?? SERVER_PORT ?? 3001` — Render injects a per-service `PORT`, which wins in
+production. The client uses the Next default 3000 locally (`next dev -p 3000`).
+
+Next inlines `NEXT_PUBLIC_*` at BUILD time — changing the server URL requires redeploying the
+client (documented in README).
+There is no `DIRECT_URL`: the Supabase Session pooler (port 5432) supports migrations. Only if
+`prisma migrate dev` cannot create its shadow database, add `SHADOW_DATABASE_URL` (dev only).
 
 ### 3.3 Security (single user, but public URL)
 - CORS: only `WEB_ORIGIN`. Helmet headers. Upload size limit at the multer layer.
-- Throttling: chat 10/min, upload 10/min, redline/compare 5/min per IP (protects Groq budget).
+- Throttling is **per route**, never one global limit (status polling must never be throttled):
+  `POST /documents` 10/min · `POST /chats/:id/messages` 10/min · `POST /comparisons` and redline
+  plan/apply 5/min (these spend LLM budget). All `GET` routes use a generous default (600/min).
+  Health routes are exempt.
 - Storage keys are UUID-based; filenames are display-only (no path traversal).
+- DOCX HTML is sanitised on the server with `sanitize-html` (allow-list: p, h1–h6, ul, ol, li,
+  table, thead, tbody, tr, td, th, strong, b, em, i, u, br, span, sup, sub; attributes: only
+  `data-start`, `data-end`, `colspan`, `rowspan`; links rendered as plain text). The client renders
+  only this stored, already-clean HTML.
 - Service role key and LLM key only in the server environment.
 - Document text is untrusted input to the LLM: wrapped in clear delimiters, system prompt says
   instructions inside documents must be ignored. Verification limits damage either way.
 
 ### 3.4 Database connections (Supabase Session pooler)
-Session pooler has a small connection cap on the free plan. Prisma `connection_limit=5`,
-pg-boss `max: 3`. Graceful shutdown closes both.
+The Session pooler has a small connection cap on the free plan (check the exact pool size in
+Supabase → Database settings). Per server instance: Prisma pool **4**, pg-boss `max: 2` = 6.
+During a Render deploy the old and new instance overlap (12), plus the Supabase dashboard — keep
+the per-instance total at most half the pool size. Migrations run as a separate pre-deploy step
+(1 connection), not inside the app process. Graceful shutdown closes both pools.
 
 ### 3.5 Observability
 - pino JSON logs with `requestId`, `documentId`, `jobId`.
@@ -414,6 +492,17 @@ Events (zod-typed in `shared/src/chat/sse-events.schema.ts`):
 `quotes {quotes[]}` · `notice {code, message}` (e.g. rate-limit retry) · `done {status}` ·
 `error {code, message}`.
 Client reads with `fetch` + `ReadableStream`; Stop = `AbortController.abort()`.
+Proxy-safe streaming (Render sits in front): response headers `Content-Type: text/event-stream`,
+`Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, `Connection: keep-alive`;
+headers flushed immediately; NO compression middleware on SSE routes; a `: ping` comment every
+15 s keeps idle connections open during long thorough scans. Streaming must be checked on the
+live URL, not only locally.
+
+### 3.7 Route ownership between features
+A route belongs to the feature that owns the resource it creates or returns, even under another
+feature's prefix: `GET /documents/:id/chats` → ChatController; `POST /documents/:id/redlines` →
+RedlineController. To check a document exists / is READY, features call the exported
+`DocumentsService.getReadyDocument(id)` from `DocumentsModule` — never the documents repository.
 
 ---
 
@@ -443,18 +532,21 @@ Client reads with `fetch` + `ReadableStream`; Stop = `AbortController.abort()`.
 - Separators belong to no item: `"\n"` after an item with `hasEOL`; a single `" "` between items on
   the same line when there is a visible horizontal gap (> 0.15 × font height) and neither side is
   already whitespace (prevents glued words like `theCompany`); `"\n\n"` between pages.
-- Page rows store `startOffset/endOffset` and the item map.
+- Page rows store `startOffset/endOffset`, `textChars`, `isScanned` and the compact item map.
 
 **DOCX extraction**
-- `mammoth.convertToHtml`. Post-process the HTML: each block element (`p, h1–h6, li, td, th`)
-  gets `data-start` / `data-end`. Block text = concatenated text nodes in DOM order; blocks joined
+- `mammoth.convertToHtml` → **sanitise first** (`sanitize-html`, allow-list in 3.3) → then
+  post-process the SANITISED HTML: each block element (`p, h1–h6, li, td, th`) gets `data-start` /
+  `data-end`. Offsets are always computed on the final stored HTML, never before sanitising. Block text = concatenated text nodes in DOM order; blocks joined
   with `"\n"`. The SAME rule lives in `shared/src/text/docx-block-text.ts` so the browser maps offsets identically.
 - Store `html` and `fullText`. One virtual Page.
 
 **Scanned / unreadable detection**
 - `avgCharsPerPage < 25` OR `≥ 80%` of pages have `< 10` characters ⇒ `SCANNED_PDF`.
-- Mixed documents (some pages scanned): READY, but store `scannedPages[]` and show a warning
-  banner "Pages 12–15 contain no readable text and were not analysed." Coverage accounts for it.
+- Per page: `textChars`, and `isScanned = textChars < 10`. `Document.scannedPageCount` = count.
+- Mixed documents (some pages scanned): READY, with a warning banner built from the `isScanned`
+  pages: "Pages 12–15 contain no readable text and were not analysed." Coverage always reports
+  these pages as skipped, so a THOROUGH run on such a document is never `complete=true`.
 
 **Boilerplate detection (PDF)**
 - Lines repeated at the top/bottom of > 50 % of pages (normalised, digits masked so "Page 3 of 150"
@@ -469,7 +561,9 @@ Client reads with `fetch` + `ReadableStream`; Stop = `AbortController.abort()`.
 
 **API**
 `POST /documents` · `GET /documents` · `GET /documents/:id` · `GET /documents/:id/file` (stream from
-Storage) · `GET /documents/:id/content` (pages+items or html) · `DELETE /documents/:id`
+Storage) · `GET /documents/:id/layout` (page count + each page's width/height/offsets/isScanned —
+small) · `GET /documents/:id/pages?from=&to=` (for at most 10 pages: each page's text slice +
+compact item map, so `item str = pageText.slice(...)`; the viewer fetches only visible pages ± 2) · `GET /documents/:id/html` (DOCX only) · `DELETE /documents/:id`
 
 **Edge cases handled ✓**
 - Wrong type (.png/.txt/.doc/renamed .exe) → 415 `UNSUPPORTED_TYPE`: "Only PDF and DOCX files are supported."
@@ -478,7 +572,7 @@ Storage) · `GET /documents/:id/content` (pages+items or html) · `DELETE /docum
 - Password-protected PDF (pdf.js `PasswordException`) → `ENCRYPTED_PDF`.
 - Encrypted/protected DOCX (OLE container, not ZIP) → `ENCRYPTED_DOCX`.
 - Corrupt PDF/DOCX → `CORRUPT_FILE`.
-- Over `MAX_PAGES` (default 500) → `TOO_MANY_PAGES` with the limit stated.
+- Over `MAX_PAGES` (default 300) → `TOO_MANY_PAGES` with the limit stated.
 - Fully scanned → `SCANNED_PDF` (never READY). Partially scanned → READY + warning + coverage.
 - Duplicate upload (same sha256) → allowed, UI shows "Same file as <name>" hint.
 - Server restart mid-job → job resumes or is re-enqueued; status ends final.
@@ -511,11 +605,15 @@ Storage) · `GET /documents/:id/content` (pages+items or html) · `DELETE /docum
   Steps: NFKC (ligatures → letters) → curly quotes `‘’“”` → `'"` → dashes `‐‑‒–—―−` → `-` →
   remove soft hyphen U+00AD and zero-width chars → collapse whitespace runs (incl. NBSP) to one
   space → trim. **Case kept. Punctuation kept. Words never changed.**
-- `findQuote(fullText, quote) → Match[]` in three passes, stopping at the first that matches:
+- `findQuote(fullText, quote) → Match[]` in four passes, stopping at the first that matches:
   1. **EXACT_WS**: normalised quote in normalised text.
   2. **HYPHEN_BREAK**: also join `letter-\nletter` line-break hyphenation (`liabil-\nity`).
   3. **WS_INSENSITIVE**: all whitespace removed on both sides (handles extraction that glued or
      split words). Same characters, same order — paraphrases still fail.
+  4. **CASE_INSENSITIVE**: passes 1–3 repeated with both sides lower-cased (models often
+     re-capitalise a quote lifted from mid-sentence). Same words, same order. Result is still
+     VERIFIED, but `matchKind = CASE_INSENSITIVE` and the chip shows a small note
+     "Capitalisation differs from the document". The highlight always shows the document's text.
 - Matches mapped back through `map` to original `{start, end}`. All occurrences returned.
 - Precompute and cache the normalised text per document (LRU) — 150-page docs are verified fast.
 
@@ -525,7 +623,7 @@ Storage) · `GET /documents/:id/content` (pages+items or html) · `DELETE /docum
 - A quote is verified ONLY against the document the model attributed it to.
 - Leading/trailing ellipses or quotation marks added by the model are stripped before matching.
   An ellipsis INSIDE a quote ("A ... B") is not supported → UNVERIFIED.
-- No fuzzy matching, no edit distance, no case-insensitive fallback.
+- No fuzzy matching, no edit distance, no word changes. Case is the ONLY thing pass 4 relaxes.
 
 **Edge cases handled ✓**
 Extra/missing spaces, line breaks, curly vs straight quotes, dash variants, ligatures, soft
@@ -533,8 +631,9 @@ hyphens, NBSP, line-break hyphenation, glued words, quote crossing a page break,
 multiple times (all matches kept), quote attributed to the wrong document (UNVERIFIED).
 
 **Out of scope ✗**
-Ellipsis-joined quotes, quotes that changed case ("The" vs "the"), translated quotes, quotes from
-scanned pages, quotes that reorder or summarise words — all UNVERIFIED by design.
+Ellipsis-joined quotes, translated quotes, quotes from scanned pages, quotes that change, add,
+drop, reorder or summarise words — all UNVERIFIED by design. (Changed case only → VERIFIED with
+the CASE_INSENSITIVE note.)
 
 **Acceptance checks**
 Unit tests for every ✓ and ✗ item above, plus 3 real excerpts from the 150-page fixture copied
@@ -564,11 +663,21 @@ across line breaks.
   "is there", "does it contain/mention/include", "any … clause", "all …", "list every", "missing".
 - Otherwise RETRIEVAL; if the answer comes back NOT_FOUND, the UI offers a one-click
   "Search the whole document" button (cost-aware escalation instead of automatic).
+- **Multi-document chats never auto-escalate.** In a multi-document chat the classifier result only
+  changes the UI: the answer runs in RETRIEVAL mode, the coverage line is per document, and each
+  document gets a "Search <name> thoroughly" button that runs a THOROUGH pass on that one document
+  (in that same chat). The answer never claims absence across the set unless every document's
+  coverage is `complete=true`.
 
 **Coverage (stored on every assistant message, always shown)**
-`{ mode, chunksRead, chunksTotal, pagesCovered: [ranges], complete: bool, skippedPages: [...] }`
-UI text: "Searched 9 of 140 sections (pages 3–5, 41, 88–90)" or "Read the whole document"
-or "Read 96 of 140 sections — stopped early because the AI service was busy."
+`{ mode, chunksRead, chunksTotal, sectionsCovered: [labels], pagesCovered: [ranges] | null,
+complete: bool, skippedPages: [...] }`
+- Sections are the primary unit for BOTH formats (label = chunk `clauseRef` or `heading`, else
+  "Part n"). Pages are added only for PDF (DOCX has one virtual page, so pages are meaningless there).
+- PDF:  "Searched 9 of 140 sections (pages 3–5, 41, 88–90)"
+- DOCX: "Searched 6 of 40 sections (clauses 3, 7.2, 12)"
+- "Read the whole document" · "Read 96 of 140 sections — stopped early because the AI service was
+  busy." · "Read the whole document except pages 12–15 (no readable text)"
 
 **Honesty rules in the prompt + post-check**
 - RETRIEVAL mode prompt: "If the provided excerpts do not contain the answer, reply that it was not
@@ -619,9 +728,12 @@ THOROUGH with progress. Forced partial run shows partial coverage and no absolut
 - **Stop:** client aborts → Nest detects `req.on('close')` → aborts the LLM request via
   AbortController → persists the partial content with status `STOPPED` → verifies any complete
   quotes already received (normally none, since quotes come last) → UI shows "Stopped" badge.
-- **Answer status** derived and shown: ANSWERED (≥1 verified quote) · NOT_FOUND (model said so) ·
-  UNSUPPORTED (text but 0 verified quotes → amber banner "No part of this answer could be verified
-  against the document. Treat it with caution.").
+- **Answer status** (`Message.answerStatus`), derived only for completed answers:
+  ANSWERED (≥1 verified quote) · NOT_FOUND (model said so) · UNSUPPORTED (status DONE, text but 0
+  verified quotes → amber banner "No part of this answer could be verified against the document.
+  Treat it with caution.") · PARTIAL (status STOPPED).
+  **A STOPPED message is never UNSUPPORTED.** It shows a neutral "Stopped — quotes are attached
+  when an answer finishes" note instead of the warning banner, because quotes arrive last.
 
 **Edge cases handled ✓**
 Delimiter split across stream chunks; model forgets the delimiter (whole text = answer, 0 quotes,
@@ -650,14 +762,16 @@ works using history.
 
 **PDF design**
 - The client renders pages with pdf.js (same pinned version as the server): canvas + `TextLayer`, virtualised
-  (only pages near the viewport are rendered; placeholders keep scroll height from stored
-  width/height).
+  (only pages near the viewport are rendered; placeholders keep scroll height from the
+  `/layout` call's width/height). Item maps are fetched lazily per page range
+  (`/pages?from=&to=`, visible pages ± 2) and cached by TanStack Query.
 - Highlight input: `{ start, end }` from the Quote match (never text search in the DOM).
 - `splitRangeByPage(range, pages)` from `shared/src/text/` → per-page segments (cross-page quotes).
 - For each page segment, find overlapping items (binary search on item offsets) → local char
   ranges inside each item.
 - **Primary (precise):** after the text layer renders, confirm its spans match the stored items
-  (`span.textContent === item.str` in order). Then build DOM `Range`s on the span text nodes and
+  (`span.textContent === item str` in order, item str taken from the page text the `/pages` call
+  returned). Then build DOM `Range`s on the span text nodes and
   draw overlay rectangles from `range.getClientRects()` (relative to the page container).
 - **Fallback (geometric):** if spans don't match, draw boxes from stored item geometry, slicing
   partial items proportionally by character count. Slightly less precise at partial-item edges;
@@ -667,7 +781,7 @@ works using history.
   context (inside a chunk the model saw) is shown first.
 
 **DOCX design**
-- Render stored HTML (sanitised) in a reading view styled like a document.
+- Render the stored, server-sanitised HTML (`/html`) in a reading view styled like a document.
 - Walk text nodes of blocks with `data-start/end`, using the shared block-text rule, to create
   DOM `Range`s → overlay rectangles. Scroll into view.
 
@@ -710,8 +824,8 @@ silently); a selected document deleted later (chat stays readable, that document
 unclickable with "Document deleted").
 
 **Out of scope ✗**
-More than 5 documents per question; THOROUGH mode across multiple documents (too costly —
-UI explains and offers per-document thorough instead).
+More than 5 documents per question; an automatic THOROUGH pass across all selected documents
+(too costly) — replaced by the per-document "Search <name> thoroughly" buttons (section 6).
 
 **Acceptance checks**
 "Compare the liability caps" across 3 contracts → one comparative answer, each quote opens the
@@ -726,13 +840,19 @@ correct document highlighted; a mislabelled quote is UNVERIFIED.
 **Lives in:** server `features/comparison/` · client `features/compare/` · shared `comparison/`
 
 **Design**
-1. `POST /comparisons` `{ baseId, revisedId }` → job (cached by both documents' sha256).
+1. `POST /comparisons` `{ baseId, revisedId }` → returns the cached row if
+   (baseSha256, revisedSha256, algorithmVersion) already exists, else creates it and enqueues a job.
 2. **Segment** both into clauses (same segmenter as chunking, non-boilerplate only). DOCX auto
    numbering is NOT in the text, so DOCX segmentation uses block structure (headings, top-level
    list items) as well as text patterns.
 3. **Align** with sequence alignment (Needleman–Wunsch style DP) over clauses using a similarity
    score (token-set Jaccard + normalised edit ratio). Content first, clause number only as a
    tie-breaker — because inserting one clause renumbers every clause after it.
+   **The leading clause reference is stripped before similarity AND before diffing**: each clause
+   keeps `ref` (e.g. "4.2", "(a)", "Article IV") separately from `body`. Only `body` is compared, so
+   "1.2 Payment terms…" vs "1.3 Payment terms…" is UNCHANGED. Renumbering is reported once as an
+   informational note at the top ("Clauses 5–18 were renumbered after the new clause 5") and is
+   never counted as a change or given a severity.
    Post-pass: unmatched removed/added pairs with similarity > 0.85 ⇒ `MOVED`.
 4. **Classify:** ADDED · REMOVED · MODIFIED · MOVED · UNCHANGED. Whitespace/punctuation-only
    differences count as UNCHANGED.
@@ -747,8 +867,11 @@ correct document highlighted; a mislabelled quote is UNVERIFIED.
    MEDIUM: any detector fired elsewhere; ADDED/REMOVED clause on other topics; duration changes.
    LOW: wording changes with no detector fired.
 7. **LLM summary:** batched (≤ 10 changes per call, structured JSON `{id, summary, significance,
-   rationale}`). Final severity = max(code floor, LLM) — EXCEPT changes the code classified as
-   cosmetic stay LOW. The UI shows which detectors fired ("Amount changed: AED 100,000 → AED
+   rationale}`). Final severity rule:
+   - If any detector fired or a critical-topic rule applied: `max(code floor, LLM)`.
+   - If no detector fired: the LLM may raise a wording change to at most MEDIUM, and the UI labels
+     that reason "AI assessment" with its rationale. HIGH always requires a code reason.
+   - Cosmetic changes (same tokens after normalising case and punctuation) are always LOW. The UI shows which detectors fired ("Amount changed: AED 100,000 → AED
    1,000,000") so severity is explainable.
 8. UI: summary header (counts by severity), filters (severity, type), sort (severity / document
    order), each change shows heading, badge, summary, inline word-diff, side-by-side toggle, and
@@ -978,15 +1101,20 @@ LLM is always mocked in automated tests. CI runs typecheck + lint + unit/fixture
   lockfile and `shared/` live there):
   - `server` — build: `npm ci && npx turbo run build --filter=@ca/server...`
     (builds `@ca/shared` first, runs `prisma generate` + `nest build`);
-    start: `npm run start:prod -w @ca/server` (= `prisma migrate deploy && node dist/main.js`).
+    pre-deploy command: `npm run prisma:deploy -w @ca/server` (= `prisma migrate deploy`);
+    start: `npm run start:prod -w @ca/server` (= `node dist/main.js`).
   - `client` — build: `npm ci && npx turbo run build --filter=@ca/client...`;
     start: `npm run start -w @ca/client` (= `next start`).
   - Build filters on paths (`client/**`, `shared/**` / `server/**`, `shared/**`) so a client-only
     change does not redeploy the server.
   Paid instances during evaluation (free instances sleep after 15 min and would kill jobs).
 - **Groq**: Developer plan with a spend limit.
-- Health check path for Render: `/health/ready`.
-- Secrets only in Render env settings. `.env.example` documents every variable.
+- Health check path for Render: `/health/ready`. Node version from `.node-version` (22.17.1).
+- The **client URL** is the one submitted; `WEB_ORIGIN` on the server is pinned to it.
+- Secrets only in Render env settings — no `.env` file is ever deployed. The root `.env.example`
+  documents every variable for both services; set them per service in Render (the server needs all
+  of them except `NEXT_PUBLIC_API_URL`; the client needs only `NEXT_PUBLIC_API_URL`).
+- Render injects `PORT` per service, which overrides `SERVER_PORT` (section 3.2).
 
 ---
 
@@ -995,3 +1123,47 @@ Auth and multi-user · OCR · Arabic/RTL (extra) · embeddings (extra) · anonym
 export (extra) · voice (extra) · mobile-first layout (desktop-first, responsive down to tablet) ·
 real-time collaboration · editing documents in the browser.
 Extras are attempted only after every Part A/B/C acceptance check passes.
+
+---
+
+## 17. Decisions from the pre-build review
+Resolved before Phase 0. Each is applied in the section named; listed here for traceability.
+
+| # | Issue found | Decision | Where |
+|---|---|---|---|
+| D1 | NestJS 12 is ESM-only | NestJS 11.2.x, CommonJS server | 1 (pins) |
+| D2 | `prisma@latest` is an 8.x RC | Pin Prisma 7.10.0 exactly | 1 (pins) |
+| D3 | pg-boss 12 is ESM-only | Pin pg-boss 11.1.2 | 1 (pins) |
+| D4 | pdfjs-dist is ESM-only, needs Node ≥ 22.13, needs font data | `await import()` in one adapter, `nodenext` module setting, `standardFontDataUrl`, Node 22.17.1 pinned | 1 (pins) |
+| D5 | shared: source or dist? | Compiled CommonJS `dist` + types, turbo `^build` | 1 (pins) |
+| D6 | Model case changes break verification | 4th pass CASE_INSENSITIVE → VERIFIED with a note | 5 |
+| D7 | Renumbering shows every later clause as changed | Strip clause ref before similarity and diff; renumbering = one info note | 10 |
+| D8 | LLM capped at LOW for substantive rewording | LLM may raise to MEDIUM ("AI assessment"); HIGH needs a code reason | 10 |
+| D9 | Global throttler would block status polling | Per-route limits; GETs generous; health exempt | 3.3 |
+| D10 | `scannedPages[]` had no storage | `Page.textChars`, `Page.isScanned`, `Document.scannedPageCount` | 2, 4 |
+| D11 | Stop → false UNSUPPORTED banner | STOPPED → PARTIAL with neutral note, never UNSUPPORTED | 7 |
+| D12 | Absence question in multi-doc chat | No auto-escalation; per-document "Search thoroughly" buttons | 6, 9 |
+| D13 | Page-based coverage meaningless for DOCX | Sections primary for both; pages only for PDF | 6 |
+| D14 | Route ownership across features | Route belongs to the resource's feature; cross-feature checks via exported service | 3.7 |
+| D15 | No DIRECT_URL | Session pooler for runtime + migrations; SHADOW_DATABASE_URL only if needed; migrations in Render pre-deploy | 3.2, 15 |
+| D16 | Connection budget | Prisma 4 + pg-boss 2 per instance; ≤ half the pool | 3.4 |
+| D17 | No HTML sanitiser | `sanitize-html` on the server; offsets computed AFTER sanitising | 3.3, 4 |
+| D18 | `NEXT_PUBLIC_API_URL` is build-time | Accepted; documented: server URL change ⇒ redeploy client | 3.2 |
+| D19 | Comparison cache had no key | sha columns + unique (base, revised, algorithmVersion) | 2, 10 |
+| D20 | One huge content payload | `/layout` + paginated `/pages` (≤ 10 pages), compact item arrays | 2, 4, 8 |
+| D21 | Chat ordering/title | `updatedAt` + server-set title from first question | 2 |
+| D22 | SSE through Render's proxy | No-buffering headers, no compression, heartbeat, check on live URL | 3.6 |
+| D23 | MAX_PAGES 500 too generous | Default 300 | 3.2, 4 |
+
+Added after a second review pass, once the pins above were tested for real:
+
+| # | Issue found | Decision | Where |
+|---|---|---|---|
+| D24 | Two `.env.example` files meant two files to fill, and a shared `PORT` would collide between client and server | ONE root `.env`; server port is `SERVER_PORT`; both apps load the root file | 3.2, 15 |
+| D25 | pdf.js 6 rejects native paths for `standardFontDataUrl` and has removed `doc.destroy()` | Forward-slash path + trailing `/` (NOT a `file://` URL — Node's fetch cannot read it); keep the loading task and call `loadingTask.destroy()` | 1 (pins) |
+| D26 | `docs/Notes.md` was referenced everywhere as `docs/NOTES.md` — fine on Windows, broken on Linux CI/Render | Renamed to `docs/NOTES.md` | — |
+| D27 | No `.gitignore` existed while a real-key `.env` was about to be created | `.gitignore` written first, with `.env` ignored and `.env.example` explicitly un-ignored (both verified with `git check-ignore`) | — |
+| D28 | Section 8's precise highlighting assumes server item offsets line up with the browser text layer — unproven, and F5 is built entirely on it | Throwaway spike at the end of F1: render one page, highlight a hard-coded offset range, report honestly whether spans match | BUILD_PLAN F1 |
+| D29 | Build order was phase-based and mixed backend/frontend arbitrarily | Rebuilt as vertical feature slices F0–F9, one per assignment requirement, each shared → server → client and demoable; F2 and F8's first half are deliberately engine-only | BUILD_PLAN |
+| D30 | `sslmode=require` fails against Supabase: pg 8.16+ reads it as `verify-full`, and Prisma 7's `@prisma/adapter-pg` runs on pg, so the Rust engine's laxer semantics do not apply | Use `sslmode=no-verify` in `DATABASE_URL` (verified: `require` → `SELF_SIGNED_CERT_IN_CHAIN`, `no-verify` reaches auth) | 3.2 |
+| D31 | Supabase project is in `ap-northeast-1` (Tokyo) while section 15 specifies Singapore for Render; Render has no Tokyo region | Either recreate the Supabase project in `ap-southeast-1` or accept ~70–80 ms per DB round trip and record it in NOTES.md — decide before F0 | 15 |

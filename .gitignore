@@ -1,0 +1,48 @@
+# --- secrets: never commit these -------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- dependencies ----------------------------------------------------------
+node_modules/
+.npm/
+
+# --- build output ----------------------------------------------------------
+dist/
+build/
+out/
+*.tsbuildinfo
+client/.next/
+client/out/
+server/dist/
+shared/dist/
+
+# --- turborepo / caches ----------------------------------------------------
+.turbo/
+.cache/
+.eslintcache
+coverage/
+
+# --- prisma ----------------------------------------------------------------
+# generated client is reproducible from schema.prisma
+server/generated/
+server/prisma/*.db
+server/prisma/*.db-journal
+
+# --- test fixtures: keep small ones, ignore the large binaries -------------
+server/test/fixtures/large/
+
+# --- editors / OS ----------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log
+npm-debug.log*
+
+# --- local scratch ---------------------------------------------------------
+tmp/
+scratch/
