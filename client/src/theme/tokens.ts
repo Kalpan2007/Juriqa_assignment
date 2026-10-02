@@ -207,6 +207,10 @@ export const tokens = {
     viewerMin: '420px',
     contentMax: '1600px',
     headerHeight: '56px',
+    /** The workspace split view: viewport minus the page header and padding. */
+    workspaceHeight: 'calc(100dvh - 10rem)',
+    /** A chat bubble never spans the full column; it reads better with a margin. */
+    messageMax: '85%',
   },
 } as const;
 

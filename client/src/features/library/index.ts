@@ -4,6 +4,7 @@
  */
 export { DocumentLibrary } from './components/document-library';
 export { DocumentStatusBadge } from './components/document-status-badge';
+export { DocumentWarnings } from './components/document-warnings';
 export { libraryApi } from './api';
 export {
   documentKeys,

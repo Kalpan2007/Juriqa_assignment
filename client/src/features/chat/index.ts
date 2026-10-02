@@ -1,5 +1,12 @@
 /**
- * Public entry point for the chat feature — built in slice F3.
- * Other code imports from '@/features/chat' only, never from its internal files (CLAUDE.md).
+ * Public entry point for the chat feature.
+ * Other code imports from '@/features/chat' only, never its internal files (CLAUDE.md).
  */
-export {};
+export { ChatPanel } from './components/chat-panel';
+export { QuoteChip } from './components/quote-chip';
+export { CoverageLine, describeCoverage } from './components/coverage-line';
+export { AnswerStatusBanner } from './components/answer-status-banner';
+export { AnswerText } from './components/answer-text';
+export { MessageList } from './components/message-list';
+export { chatApi } from './api';
+export { chatKeys, useChat, useChatsForDocument, useCreateChat, useSendMessage } from './hooks/use-chat';

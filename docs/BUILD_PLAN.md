@@ -550,7 +550,7 @@ submit" and "How we evaluate".
 | F0 | Foundation | — | **done** |
 | F1 | Document library | A1 | **done** |
 | F2 | Verification engine | A3 engine | **done** |
-| F3 | Ask one document | A2, A3 UI | not started |
+| F3 | Ask one document | A2, A3 UI | **done** |
 | F4 | Whole-document reading | A4 | not started |
 | F5 | Citation highlighting | B5 | not started |
 | F6 | Ask many documents | B6 | not started |

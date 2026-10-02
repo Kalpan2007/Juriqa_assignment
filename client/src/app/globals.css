@@ -147,3 +147,16 @@
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
 }
+
+/**
+ * The workspace split view's height.
+ *
+ * A utility rather than an inline style because it must apply ONLY from the large breakpoint
+ * up: below that the panes stack, and a fixed viewport height on a stacked column would clip
+ * the chat. The value itself still comes from the token set.
+ */
+@utility workspace-split-height {
+  @media (width >= 64rem) {
+    height: var(--layout-workspace-height);
+  }
+}
