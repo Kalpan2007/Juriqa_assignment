@@ -548,7 +548,7 @@ submit" and "How we evaluate".
 | Slice | Feature | Assignment | Status |
 |---|---|---|---|
 | F0 | Foundation | — | **done** |
-| F1 | Document library | A1 | not started |
+| F1 | Document library | A1 | **done** |
 | F2 | Verification engine | A3 engine | not started |
 | F3 | Ask one document | A2, A3 UI | not started |
 | F4 | Whole-document reading | A4 | not started |

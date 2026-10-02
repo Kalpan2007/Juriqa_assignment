@@ -4,7 +4,7 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "lib": ["ES2023"],
-    "types": ["node"],
+    "types": ["node", "multer"],
     "outDir": "dist",
     "rootDir": ".",
     "declaration": false,

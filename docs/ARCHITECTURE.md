@@ -549,9 +549,20 @@ RedlineController. To check a document exists / is READY, features call the expo
   these pages as skipped, so a THOROUGH run on such a document is never `complete=true`.
 
 **Boilerplate detection (PDF)**
-- Lines repeated at the top/bottom of > 50 % of pages (normalised, digits masked so "Page 3 of 150"
-  matches "Page 4 of 150") are flagged. Their chunks get `isBoilerplate=true` and are excluded from
-  retrieval and comparison. `fullText` is NOT modified (offsets stay valid).
+- Lines repeated at the top/bottom (first/last 3 lines) of > 50 % of pages are flagged, counted
+  per DISTINCT page so a line repeated three times on one page does not qualify. Minimum 4 pages.
+- **Two separate passes** — digit masking cannot be applied to every line:
+  1. **exact** (case + whitespace normalised, digits intact) — catches "CONFIDENTIAL — DRAFT";
+  2. **page marker** (digits masked) — catches "Page 3 of 150", but ONLY for lines whose letters
+     total ≤ 10 after stripping digits and punctuation, and which contain a digit.
+  Masking every line is actively harmful: "5. Term" and "6. Notices" both collapse to a `#. word`
+  shape, so numbered CLAUSE HEADINGS would be flagged as running headers and real contract text
+  would be excluded from search. Found by unit test; the regression is covered by one.
+- Lines longer than 120 characters are never boilerplate (that is body text that happens to recur).
+- A chunk is marked `isBoilerplate` only when it is MOSTLY boilerplate (`boilerplateOverlapRatio`),
+  because one header line swallowed by an 800-token chunk must not disqualify the clause around it.
+- Boilerplate chunks are excluded from retrieval and comparison. `fullText` is NOT modified
+  (offsets stay valid) — boilerplate is recorded as offset ranges.
 
 **Chunking**
 - Segment by clause headings (numbered `1.`, `1.2`, `Article IV`, `Section 5`, ALL-CAPS headings,

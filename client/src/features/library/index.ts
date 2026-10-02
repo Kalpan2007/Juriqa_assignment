@@ -1,5 +1,15 @@
 /**
- * Public entry point for the library feature — built in slice F1.
- * Other code imports from '@/features/library' only, never from its internal files (CLAUDE.md).
+ * Public entry point for the library feature.
+ * Other code imports from '@/features/library' only, never its internal files (CLAUDE.md).
  */
-export {};
+export { DocumentLibrary } from './components/document-library';
+export { DocumentStatusBadge } from './components/document-status-badge';
+export { libraryApi } from './api';
+export {
+  documentKeys,
+  useDocument,
+  useDocuments,
+  useDocumentWarnings,
+  useDeleteDocument,
+  useUploadDocument,
+} from './hooks/use-documents';
