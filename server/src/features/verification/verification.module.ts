@@ -1,8 +1,14 @@
 import { Module } from '@nestjs/common';
+import { QuoteVerifierService } from './quote-verifier.service';
 
 /**
- * VerificationModule — built in slice F2 (ARCHITECTURE.md section 5).
- * Registered here so the module graph and folder structure are visible from day one.
+ * Quote verification (ARCHITECTURE.md section 5) — the heart of the application.
+ *
+ * `QuoteVerifierService` is the only export. Chat, multi-document chat and the redline
+ * locator all go through it, so there is exactly one implementation of "is this quote real".
  */
-@Module({})
+@Module({
+  providers: [QuoteVerifierService],
+  exports: [QuoteVerifierService],
+})
 export class VerificationModule {}
