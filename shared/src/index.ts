@@ -9,3 +9,4 @@ export * from './chat';
 export * from './errors';
 export * from './documents';
 export * from './text';
+export * from './comparison';

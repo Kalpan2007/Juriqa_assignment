@@ -1,1 +1,2 @@
-export * from './comparison.module';
+export { ComparisonModule } from './comparison.module';
+export { ComparisonService } from './comparison.service';

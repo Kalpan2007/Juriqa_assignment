@@ -1,8 +1,15 @@
 import { Module } from '@nestjs/common';
+import { DocumentsModule } from '../documents/documents.module';
+import { ComparisonController } from './comparison.controller';
+import { ComparisonService } from './comparison.service';
 
 /**
- * ComparisonModule — built in slice F7 (ARCHITECTURE.md section 10).
- * Registered here so the module graph and folder structure are visible from day one.
+ * ComparisonModule — slice F7 (ARCHITECTURE.md section 10).
  */
-@Module({})
+@Module({
+  imports: [DocumentsModule],
+  controllers: [ComparisonController],
+  providers: [ComparisonService],
+  exports: [ComparisonService],
+})
 export class ComparisonModule {}

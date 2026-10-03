@@ -111,6 +111,17 @@ export async function extractDocx(buffer: Buffer): Promise<DocxExtraction> {
  */
 export function annotateBlocks(sanitizedHtml: string): { html: string; fullText: string } {
   const root = parse(sanitizedHtml);
+
+  // Lift nested lists out of parent list items so parent heading text is preserved as its own block.
+  const nestedLists = root.querySelectorAll('li > ol, li > ul');
+  nestedLists.reverse().forEach((list) => {
+    const parentLi = list.parentNode;
+    if (parentLi) {
+      parentLi.insertAdjacentHTML('afterend', list.toString());
+      list.remove();
+    }
+  });
+
   const selector = DOCX_BLOCK_TAGS.join(',');
   const candidates = root.querySelectorAll(selector);
 

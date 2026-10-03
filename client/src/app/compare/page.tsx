@@ -1,13 +1,12 @@
 import { PageHeader } from '@/components/layout/page-header';
-import { EmptyState } from '@/components/feedback';
+import { VersionPicker } from '@/features/compare';
 import { copy } from '@/content/copy';
 
 export default function ComparePage() {
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader title={copy.compare.title} subtitle={copy.compare.subtitle} />
-      {/* Replaced by <VersionPicker /> from @/features/compare in slice F7. */}
-      <EmptyState title={copy.compare.empty.title} description={copy.compare.empty.description} />
-    </>
+      <VersionPicker />
+    </div>
   );
 }
