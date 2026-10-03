@@ -57,6 +57,8 @@ describe('classifyQuestion — specific questions do not', () => {
     'When does the term start?',
     'What happens if the Supplier is late?',
     'Explain the indemnity in clause 7',
+    'What does it say about liability?',
+    'What does the agreement say about liability?',
   ])('treats %j as a specific question', (question) => {
     const result = classifyQuestion(question);
     expect(result.needsWholeDocument, result.reason).toBe(false);

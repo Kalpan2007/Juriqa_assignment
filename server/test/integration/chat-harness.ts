@@ -3,6 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import type { CoverageDto } from '@ca/shared';
 import { AppModule } from '../../src/app.module';
 import { AllExceptionsFilter } from '../../src/core/filters/all-exceptions.filter';
 import { LlmService, type StreamOptions } from '../../src/infrastructure/llm/llm.service';
@@ -66,6 +67,14 @@ export class ScriptedLlm {
 
 export interface ParsedStream {
   answer: string;
+  /**
+   * The coverage from the LAST event that carried one.
+   *
+   * This matters for a thorough read: `meta` carries an optimistic estimate built before the
+   * scan runs, and the `quotes` event replaces it with what was ACTUALLY read. A test (or a
+   * UI) that looked only at `meta` would report a partial scan as complete.
+   */
+  finalCoverage: CoverageDto | null;
   quotes: Array<{
     citation: number;
     status: string;
@@ -78,12 +87,19 @@ export interface ParsedStream {
   notices: Array<{ code: string; message: string }>;
   meta: {
     mode: string;
-    coverage: { chunksRead: number; chunksTotal: number; complete: boolean };
+    coverage: CoverageDto;
   } | null;
 }
 
 export function parseSse(raw: string): ParsedStream {
-  const result: ParsedStream = { answer: '', quotes: [], done: null, notices: [], meta: null };
+  const result: ParsedStream = {
+    answer: '',
+    quotes: [],
+    done: null,
+    notices: [],
+    meta: null,
+    finalCoverage: null,
+  };
 
   for (const block of raw.split('\n\n')) {
     const line = block.split('\n').find((candidate) => candidate.startsWith('data:'));
@@ -94,7 +110,11 @@ export function parseSse(raw: string): ParsedStream {
     if (event.type === 'quotes') result.quotes = event.quotes;
     if (event.type === 'done' && result.done === null) result.done = event;
     if (event.type === 'notice') result.notices.push(event);
-    if (event.type === 'meta') result.meta = event;
+    if (event.type === 'meta') {
+      result.meta = event;
+      result.finalCoverage = event.coverage ?? result.finalCoverage;
+    }
+    if (event.type === 'quotes' && event.coverage) result.finalCoverage = event.coverage;
   }
   return result;
 }

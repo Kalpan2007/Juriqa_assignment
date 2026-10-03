@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { MessageSquare, Search } from 'lucide-react';
-import type { MessageDto, QuoteDto } from '@ca/shared';
+import type { MessageDto, QuoteDto, RetrievalMode } from '@ca/shared';
 import { EmptyState, ErrorState, LoadingState } from '@/components/feedback';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api-client';
@@ -33,7 +33,17 @@ export function ChatPanel({
   onOpenQuote?: (quote: QuoteDto) => void;
 }) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  /**
+   * The first question, parked while the chat is being created.
+   *
+   * It carries the MODE as well as the text: a user who ticks "read whole document" before
+   * their very first question would otherwise have that silently downgraded to a partial read
+   * — and then be shown coverage saying so, with no idea why.
+   */
+  const [pendingQuestion, setPendingQuestion] = useState<{
+    content: string;
+    mode?: RetrievalMode;
+  } | null>(null);
 
   const chats = useChatsForDocument(documentId);
   const chat = useChat(activeChatId);
@@ -49,17 +59,18 @@ export function ChatPanel({
    */
   useEffect(() => {
     if (activeChatId === null || pendingQuestion === null) return;
-    const question = pendingQuestion;
+    const { content, mode } = pendingQuestion;
     setPendingQuestion(null);
-    void send(question);
+    void send(content, mode === undefined ? undefined : { mode });
   }, [activeChatId, pendingQuestion, send]);
 
-  const handleSend = (content: string) => {
+  const handleSend = (content: string, options?: { thorough: boolean }) => {
+    const mode: RetrievalMode | undefined = options?.thorough === true ? 'THOROUGH' : undefined;
     if (activeChatId !== null) {
-      void send(content);
+      void send(content, mode === undefined ? undefined : { mode });
       return;
     }
-    setPendingQuestion(content);
+    setPendingQuestion({ content, ...(mode === undefined ? {} : { mode }) });
     createChat.mutate(undefined, {
       onSuccess: (created) => setActiveChatId(created.id),
       onError: () => setPendingQuestion(null),

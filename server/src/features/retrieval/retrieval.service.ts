@@ -3,6 +3,9 @@ import type { CoverageDto, RetrievalMode } from '@ca/shared';
 import { AppConfigService } from '../../config/config.service';
 import { DocumentsService } from '../documents/documents.service';
 import { ChunkSearchRepository, type SearchedChunk } from './chunk-search.repository';
+
+/** Re-exported so a feature can type a chunk without reaching into the repository. */
+export type { SearchedChunk };
 import {
   batchChunksByBudget,
   computeBudget,
@@ -50,6 +53,13 @@ export interface RetrievalResult {
   classification: Classification;
   /** True when there was no room for any excerpt at all. */
   budgetExhausted: boolean;
+  /**
+   * The document’s pages, carried through so a caller that REBUILDS coverage (the thorough
+   * runner) keeps the unreadable-page facts. Dropping them would let a partially scanned
+   * document be reported as completely read.
+   */
+  pages: CoveragePage[];
+  isPdf: boolean;
 }
 
 /** Minimum sections per document in a multi-document chat (ARCHITECTURE section 9). */
@@ -108,7 +118,7 @@ export class RetrievalService {
 
     if (mode === 'THOROUGH') {
       const all = await this.search.findAllForThorough(request.documentId);
-      const batches = batchChunksByBudget(all, Math.max(excerptTokens, MIN_EXCERPT_TOKENS));
+      const batches = batchChunksByBudget(all, Math.min(excerptTokens, 1_000));
 
       return {
         mode,
@@ -125,6 +135,8 @@ export class RetrievalService {
         }),
         classification,
         budgetExhausted: budget.exhausted,
+        pages,
+        isPdf,
       };
     }
 
@@ -149,6 +161,8 @@ export class RetrievalService {
       coverage: buildCoverage({ mode, readChunks: selected, totalChunks, pages, isPdf }),
       classification,
       budgetExhausted: budget.exhausted,
+      pages,
+      isPdf,
     };
   }
 

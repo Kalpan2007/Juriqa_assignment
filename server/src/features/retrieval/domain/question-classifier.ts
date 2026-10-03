@@ -30,8 +30,8 @@ export interface Classification {
 const EXISTENCE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bis there\b/i, reason: '"is there"' },
   { pattern: /\bare there\b/i, reason: '"are there"' },
-  { pattern: /\bdoes (?:it|the \w+) (?:contain|include|mention|have|specify|say|provide|cover)\b/i, reason: '"does it contain"' },
-  { pattern: /\bdo(?:es)? (?:the )?(?:document|contract|agreement|lease)s? (?:contain|include|mention|have)\b/i, reason: '"does the document contain"' },
+  { pattern: /(?<!\b(?:what|how)\s+)\bdoes (?:it|the \w+) (?:contain|include|mention|have|specify|say|provide|cover)\b/i, reason: '"does it contain"' },
+  { pattern: /(?<!\b(?:what|how)\s+)\bdo(?:es)? (?:the )?(?:document|contract|agreement|lease)s? (?:contain|include|mention|have)\b/i, reason: '"does the document contain"' },
   // `s?` matters: "Are any indemnity provisions included?" is the normal phrasing, and a
   // pattern that only matched the singular would miss most real existence questions.
   { pattern: /\bany\b[^?.]{0,40}\b(?:clause|provision|section|term|mention|reference|right|obligation)s?\b/i, reason: '"any … clause(s)"' },

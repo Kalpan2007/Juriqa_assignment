@@ -13,7 +13,7 @@ import { AppError } from '../../core/errors/app-error';
 import type { SseWriter } from '../../core/sse/sse-writer';
 import { LlmService } from '../../infrastructure/llm/llm.service';
 import { DocumentsService } from '../documents/documents.service';
-import { RetrievalService } from '../retrieval/retrieval.service';
+import { RetrievalService, type SearchedChunk } from '../retrieval/retrieval.service';
 import { QuoteVerifierService } from '../verification/quote-verifier.service';
 import { ChatRepository, type ChatWithRelations, type MessageWithQuotes, type PersistQuoteInput } from './chat.repository';
 import { AnswerStreamParser } from './domain/answer-stream-parser';
@@ -25,6 +25,11 @@ import {
   buildAnswerUserPrompt,
   renderExcerpts,
 } from './prompts/answer.prompt';
+import {
+  buildThoroughReduceSystemPrompt,
+  buildThoroughReduceUserPrompt,
+} from './prompts/thorough.prompt';
+import { ThoroughRunner } from './thorough-runner';
 
 /**
  * Chat orchestration (ARCHITECTURE section 7).
@@ -55,6 +60,7 @@ export class ChatService {
     private readonly retrieval: RetrievalService,
     private readonly verifier: QuoteVerifierService,
     private readonly llm: LlmService,
+    private readonly thorough: ThoroughRunner,
   ) {}
 
   async createChat(documentIds: readonly string[]): Promise<ChatSummaryDto> {
@@ -171,6 +177,27 @@ export class ChatService {
       mode: retrieved.mode,
       coverage: retrieved.coverage,
     });
+
+    /**
+     * A whole-document read goes through the map-reduce runner instead (ARCHITECTURE
+     * section 6). It replaces the retrieval excerpts with findings gathered from every
+     * section, and — crucially — replaces the optimistic coverage with what was ACTUALLY
+     * read, so a scan that stopped part-way cannot be presented as a complete one.
+     */
+    if (retrieved.mode === 'THOROUGH' && retrieved.batches.length > 0) {
+      await this.answerThoroughly({
+        chatId,
+        assistantId: assistant.id,
+        document,
+        fullText,
+        question: input.content,
+        historyText,
+        retrieved,
+        writer,
+        signal,
+      });
+      return;
+    }
 
     if (retrieved.chunks.length === 0) {
       // Nothing matched. Said plainly, scoped to what was searched — never "the document
@@ -295,6 +322,179 @@ export class ChatService {
         quotesVerified: verified.dtos.filter((quote) => quote.status === 'VERIFIED').length,
       },
       'Answer complete',
+    );
+  }
+
+  /**
+   * Answers by reading the WHOLE document: map over every section, then one streaming
+   * answer over the findings (ARCHITECTURE section 6).
+   *
+   * The coverage the runner returns replaces the optimistic one sent in `meta`, because it
+   * is the only one that reflects what was actually read. A scan interrupted by a provider
+   * outage ends up with `complete: false` and a reason, and the reduce prompt is then told
+   * it may not claim anything is absent.
+   */
+  private async answerThoroughly(input: {
+    chatId: string;
+    assistantId: string;
+    document: { id: string; name: string };
+    fullText: string;
+    question: string;
+    historyText: string;
+    retrieved: {
+      coverage: CoverageDto;
+      batches: SearchedChunk[][];
+      chunks: SearchedChunk[];
+      pages: Array<{ number: number; startOffset: number; endOffset: number; isScanned: boolean }>;
+      isPdf: boolean;
+    };
+    writer: SseWriter<SseEvent>;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const { chatId, assistantId, document, fullText, question, historyText, retrieved, writer, signal } =
+      input;
+
+    const scan = await this.thorough.run({
+      documentId: document.id,
+      documentName: document.name,
+      fullText,
+      question,
+      batches: retrieved.batches,
+      totalChunks: retrieved.coverage.chunksTotal,
+      // The real pages, so an unreadable page keeps the scan from being called complete.
+      pages: retrieved.pages,
+      isPdf: retrieved.isPdf,
+      signal,
+      writer,
+    });
+
+    // The user stopped during the scan: keep nothing half-claimed.
+    if (scan.aborted) {
+      await this.repository.finishAssistantMessage({
+        messageId: assistantId,
+        content: '',
+        status: 'STOPPED',
+        answerStatus: 'PARTIAL',
+        coverage: scan.coverage,
+        quotes: [],
+      });
+      await this.repository.touch(chatId);
+      writer.send({ type: 'done', status: 'STOPPED', answerStatus: 'PARTIAL' });
+      return;
+    }
+
+    this.thorough.assertUsable(scan);
+
+    // Coverage from the scan supersedes the estimate, so the UI shows the truth.
+    writer.send({
+      type: 'quotes',
+      quotes: [],
+      coverage: scan.coverage,
+    });
+
+    const reduceInput = {
+      documentName: document.name,
+      question,
+      findings: scan.findings,
+      verifiedQuotes: scan.verifiedQuotes.map((text, index) => `${index + 1}. ${text}`).join('\n'),
+      historyText,
+      complete: scan.coverage.complete,
+      stoppedEarlyReason: scan.coverage.stoppedEarlyReason,
+      skippedPages: scan.coverage.skippedPages,
+    };
+
+    const parser = new AnswerStreamParser();
+    let streamError: unknown = null;
+    let streamAborted = false;
+
+    try {
+      const result = await this.llm.stream({
+        purpose: 'chat.thorough.reduce',
+        messages: [
+          { role: 'system', content: buildThoroughReduceSystemPrompt(reduceInput) },
+          { role: 'user', content: buildThoroughReduceUserPrompt(reduceInput) },
+        ],
+        maxOutputTokens: ANSWER_OUTPUT_TOKENS,
+        signal,
+        onDelta: (text) => {
+          const step = parser.push(text);
+          if (step.delta.length > 0) writer.send({ type: 'delta', text: step.delta });
+        },
+        onRetryNotice: (attempt, waitMs) => {
+          writer.send({
+            type: 'notice',
+            code: 'LLM_RATE_LIMITED',
+            message: `The AI service is busy. Retrying (attempt ${attempt}) in ${Math.ceil(waitMs / 1000)}s…`,
+          });
+        },
+      });
+      streamAborted = result.aborted;
+    } catch (error) {
+      streamError = error;
+    }
+
+    const final = parser.finish();
+    if (final.delta.length > 0 && !streamAborted) {
+      writer.send({ type: 'delta', text: final.delta });
+    }
+
+    if (streamError !== null) {
+      await this.finishWithError(assistantId, parser.currentAnswer, streamError, writer);
+      return;
+    }
+
+    if (streamAborted) {
+      await this.repository.finishAssistantMessage({
+        messageId: assistantId,
+        content: final.answerText.length > 0 ? final.answerText : parser.currentAnswer,
+        status: 'STOPPED',
+        answerStatus: 'PARTIAL',
+        coverage: scan.coverage,
+        quotes: [],
+      });
+      await this.repository.touch(chatId);
+      writer.send({ type: 'done', status: 'STOPPED', answerStatus: 'PARTIAL' });
+      return;
+    }
+
+    const payload = parseQuotePayload(final.quotesText);
+    if (payload.error !== null) {
+      writer.send({ type: 'notice', code: 'LLM_INVALID_RESPONSE', message: payload.error });
+    }
+
+    // Re-verified rather than trusted: the reduce step was ASKED to use only verified
+    // sentences, but a prompt is a request, not a guarantee.
+    const verified = this.verifyQuotes(document.id, document.name, fullText, payload.quotes);
+    const answerStatus = deriveAnswerStatus({
+      messageStatus: 'DONE',
+      answerText: final.answerText,
+      quotes: verified.dtos,
+    });
+
+    await this.repository.finishAssistantMessage({
+      messageId: assistantId,
+      content: final.answerText,
+      status: 'DONE',
+      answerStatus,
+      coverage: scan.coverage,
+      quotes: verified.rows,
+    });
+    await this.repository.touch(chatId);
+
+    writer.send({ type: 'quotes', quotes: verified.dtos, coverage: scan.coverage });
+    writer.send({ type: 'done', status: 'DONE', answerStatus });
+
+    this.logger.log(
+      {
+        chatId,
+        documentId: document.id,
+        mode: 'THOROUGH',
+        answerStatus,
+        chunksRead: scan.coverage.chunksRead,
+        chunksTotal: scan.coverage.chunksTotal,
+        complete: scan.coverage.complete,
+      },
+      'Thorough answer complete',
     );
   }
 

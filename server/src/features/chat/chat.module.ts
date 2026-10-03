@@ -5,6 +5,7 @@ import { VerificationModule } from '../verification/verification.module';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { ChatRepository } from './chat.repository';
+import { ThoroughRunner } from './thorough-runner';
 
 /**
  * Chat with a document (ARCHITECTURE.md section 7).
@@ -16,7 +17,7 @@ import { ChatRepository } from './chat.repository';
 @Module({
   imports: [DocumentsModule, RetrievalModule, VerificationModule],
   controllers: [ChatController],
-  providers: [ChatService, ChatRepository],
+  providers: [ChatService, ChatRepository, ThoroughRunner],
   exports: [ChatService],
 })
 export class ChatModule implements OnApplicationBootstrap {

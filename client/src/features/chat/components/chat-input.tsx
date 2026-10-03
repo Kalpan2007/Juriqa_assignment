@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Send, Square } from 'lucide-react';
+import { BookOpen, Send, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { copy } from '@/content/copy';
 
@@ -19,18 +19,26 @@ export function ChatInput({
   isStreaming,
   disabled = false,
 }: {
-  onSend: (content: string) => void;
+  onSend: (content: string, options?: { thorough: boolean }) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled?: boolean;
 }) {
   const [value, setValue] = useState('');
+  /**
+   * "Read whole document" (ARCHITECTURE section 6).
+   *
+   * Off by default and deliberately explicit: a whole-document read costs many requests, so
+   * the user chooses it. The classifier still escalates on its own for questions that cannot
+   * be answered honestly from a partial read — this toggle is for everything else.
+   */
+  const [thorough, setThorough] = useState(false);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const content = value.trim();
     if (content.length === 0 || isStreaming || disabled) return;
-    onSend(content);
+    onSend(content, { thorough });
     setValue('');
   };
 
@@ -43,7 +51,20 @@ export function ChatInput({
   };
 
   return (
-    <form onSubmit={submit} className="flex items-end gap-2 border-t border-border bg-surface p-3">
+    <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border bg-surface p-3">
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-caption text-fg-muted">
+        <input
+          type="checkbox"
+          checked={thorough}
+          onChange={(event) => setThorough(event.target.checked)}
+          disabled={isStreaming || disabled}
+          className="accent-primary"
+        />
+        <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+        {copy.chat.readWholeDocument}
+      </label>
+
+      <div className="flex items-end gap-2">
       <textarea
         value={value}
         onChange={(event) => setValue(event.target.value)}
@@ -66,6 +87,7 @@ export function ChatInput({
           {copy.chat.send}
         </Button>
       )}
+      </div>
     </form>
   );
 }
