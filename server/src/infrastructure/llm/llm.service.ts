@@ -292,7 +292,7 @@ export class LlmService {
 
   private errorCode(error: unknown): string {
     if (!(error instanceof OpenAI.APIError)) return 'LLM_UNAVAILABLE';
-    if (error.status === 429) return 'LLM_RATE_LIMITED';
+    if (error.status === 429 || error.status === 413) return 'LLM_RATE_LIMITED';
     if (error.status === 401 || error.status === 403) return 'LLM_UNAVAILABLE';
     if (error instanceof OpenAI.APIConnectionTimeoutError) return 'LLM_TIMEOUT';
     return 'LLM_UNAVAILABLE';

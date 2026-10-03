@@ -70,7 +70,31 @@ The trickiest challenge was handling runs containing mixed content nodes (e.g., 
 - **Complex Word Tables in Redlining:** Redlining currently targets standard body paragraphs. If an edit is requested inside nested table cells or header/footer fields, the engine gracefully rejects it rather than corrupting complex table XML schemas.
 - **Scanned PDF Highlighting:** For scanned or partially scanned PDFs where text extraction yields 0 text items, geometric highlighting cannot be mapped to character offsets; a warning banner is shown instead.
 
-#### What We Would Build Next With More Time
+---
+
+### 5. Bugs the testing caught (all fixed)
+
+These are the ones worth knowing about, because each would have shipped silently:
+
+1. **Groq Free/On-Demand Tier 8,000 TPM Limit (HTTP 413):**
+   - *Symptom:* Chat streams failed immediately with `LLM_UNAVAILABLE` despite valid API credentials.
+   - *Cause:* `LLM_MAX_INPUT_TOKENS` was set to 12,000 in `.env`. The budgeter packed retrieved context up to this limit, producing ~9,000 total tokens with output reserve. Groq strictly enforces an 8,000 Token-Per-Minute ceiling on free/on-demand tiers, rejecting requests with HTTP 413 `Request too large ... on tokens per minute (TPM)`.
+   - *Fix:* Configured `LLM_MAX_INPUT_TOKENS=5500` and `LLM_TPM_BUDGET=7500` in `.env` and `.env.example`, and mapped HTTP 413 to `LLM_RATE_LIMITED` in `errorCode()`. Prompts now consistently stay within safe operational limits while retaining ample context.
+
+2. **Scanned PDF Status Overwrite:**
+   - *Symptom:* Scanned PDFs with zero extractable text were erroneously marked as `READY`.
+   - *Cause:* `processPdf` set the status to `FAILED`, but the caller subsequently overwrote the database record with `READY`.
+   - *Fix:* Enforced that terminal statuses (`FAILED`) are immutable and cannot be overwritten by subsequent pipeline stages.
+
+3. **OOXML Run Child Normalization in Redlining:**
+   - *Symptom:* Redlining paragraphs containing tabs (`<w:tab/>`) or line breaks (`<w:br/>`) caused duplicate whitespace or malformed XML in Word.
+   - *Cause:* Word frequently packages text and structural nodes within a single `<w:r>` run. Slicing the run text without isolating non-text nodes duplicated the child elements.
+   - *Fix:* Introduced `normalizeRunChildren()` to isolate distinct run children into individual runs before diff calculation.
+
+---
+
+### 6. What We Would Build Next With More Time
 1. **Hybrid Vector + Keyword Search:** Combine our current PostgreSQL full-text search with pgvector embeddings (e.g., `text-embedding-3-small`) to enable semantic retrieval across synonyms and complex cross-clause dependencies.
 2. **Clause Extraction & Playbook Compliance:** Automatically categorize standard clauses (Indemnity, Limitation of Liability, Termination, Governing Law) and compare them against a customizable law firm playbook to flag deviation risks automatically upon upload.
 3. **Arabic Contract Support:** Support bilingual UAE contracts (Arabic/English) with RTL layout rendering, Arabic quote normalization (handling diacritics / Tashkeel and Tatweel), and bidirectional highlighting.
+

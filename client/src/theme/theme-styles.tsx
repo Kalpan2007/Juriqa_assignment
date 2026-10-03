@@ -21,11 +21,9 @@ export function ThemeStyles() {
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    ${cssVariablesFor('dark')}
-    color-scheme: dark;
-  }
+:root[data-theme='light'] {
+  ${cssVariablesFor('light')}
+  color-scheme: light;
 }
 
 :root[data-theme='dark'] {

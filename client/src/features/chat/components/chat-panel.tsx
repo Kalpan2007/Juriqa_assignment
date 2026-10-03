@@ -1,9 +1,18 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { MessageSquare, Search } from 'lucide-react';
+import {
+  Search,
+  History,
+  Plus,
+  Sparkles,
+  Scale,
+  ShieldAlert,
+  Coins,
+  ChevronDown,
+} from 'lucide-react';
 import type { MessageDto, QuoteDto, RetrievalMode } from '@ca/shared';
-import { EmptyState, ErrorState, LoadingState } from '@/components/feedback';
+import { ErrorState, LoadingState } from '@/components/feedback';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api-client';
 import { copy } from '@/content/copy';
@@ -18,28 +27,46 @@ import { ChatHistoryList } from './chat-history-list';
 import { ChatInput } from './chat-input';
 import { MessageList } from './message-list';
 
-/**
- * Chat with one document (ARCHITECTURE section 7).
- *
- * A chat is created lazily, on the first question, so opening a document does not litter the
- * history with empty conversations.
- */
+const STARTER_PROMPTS = [
+  {
+    icon: Coins,
+    title: 'Financial Commitments',
+    prompt: 'What is the total commitment amount under this agreement?',
+    thorough: false,
+    tag: 'Fast Retrieval',
+  },
+  {
+    icon: Search,
+    title: 'Absence Audit (Non-Compete)',
+    prompt: 'Is there a non-compete restriction or exclusivity clause in this contract?',
+    thorough: true,
+    tag: 'Thorough Scan',
+  },
+  {
+    icon: Scale,
+    title: 'Governing Law',
+    prompt: 'What is the governing law and dispute resolution mechanism in this contract?',
+    thorough: false,
+    tag: 'Fast Retrieval',
+  },
+  {
+    icon: ShieldAlert,
+    title: 'Default Triggers',
+    prompt: 'What are the events of default and remedy periods?',
+    thorough: false,
+    tag: 'Fast Retrieval',
+  },
+];
+
 export function ChatPanel({
   documentId,
   onOpenQuote,
 }: {
   documentId: string;
-  /** Opens the viewer at the quote's passage. Wired up by slice F5. */
   onOpenQuote?: (quote: QuoteDto) => void;
 }) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  /**
-   * The first question, parked while the chat is being created.
-   *
-   * It carries the MODE as well as the text: a user who ticks "read whole document" before
-   * their very first question would otherwise have that silently downgraded to a partial read
-   * — and then be shown coverage saying so, with no idea why.
-   */
+  const [showHistory, setShowHistory] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState<{
     content: string;
     mode?: RetrievalMode;
@@ -48,15 +75,11 @@ export function ChatPanel({
   const chats = useChatsForDocument(documentId);
   const chat = useChat(activeChatId);
   const createChat = useCreateChat(documentId);
-  const { send, stop, streaming, isStreaming } = useSendMessage(activeChatId, documentId);
+  const { send, stop, streaming, isStreaming, optimisticUserMessage } = useSendMessage(
+    activeChatId,
+    documentId,
+  );
 
-  /**
-   * Sends the question that was asked before a chat existed.
-   *
-   * The first question has to wait for the chat to be created, so it is parked here and sent
-   * once `activeChatId` is set. Without this the very first question of a session would be
-   * silently dropped.
-   */
   useEffect(() => {
     if (activeChatId === null || pendingQuestion === null) return;
     const { content, mode } = pendingQuestion;
@@ -70,6 +93,7 @@ export function ChatPanel({
       void send(content, mode === undefined ? undefined : { mode });
       return;
     }
+    // Optimistically store pending question so it renders immediately before chat creation finishes
     setPendingQuestion({ content, ...(mode === undefined ? {} : { mode }) });
     createChat.mutate(undefined, {
       onSuccess: (created) => setActiveChatId(created.id),
@@ -77,17 +101,62 @@ export function ChatPanel({
     });
   };
 
-  /**
-   * Saved messages plus the one currently streaming, as a single list.
-   *
-   * The user’s own question is persisted by the server before the stream opens, so it
-   * arrives with the next refetch; only the assistant’s in-flight answer needs appending.
-   */
   const messages = useMemo<MessageDto[]>(() => {
     const saved = chat.data?.messages ?? [];
-    if (streaming === null) return saved;
-    return [...saved, streamingAsMessage(streaming)];
-  }, [chat.data?.messages, streaming]);
+    const result = [...saved];
+
+    // Optimistically render the user question immediately upon submit
+    const currentPendingContent = pendingQuestion?.content ?? optimisticUserMessage?.content;
+    if (currentPendingContent) {
+      const alreadySaved = saved.some(
+        (m) => m.role === 'USER' && m.content === currentPendingContent,
+      );
+      if (!alreadySaved) {
+        result.push(
+          optimisticUserMessage ?? {
+            id: 'optimistic-user-pending',
+            role: 'USER',
+            content: currentPendingContent,
+            status: 'DONE',
+            answerStatus: null,
+            mode: pendingQuestion?.mode ?? 'RETRIEVAL',
+            coverage: null,
+            documentCoverage: [],
+            errorCode: null,
+            quotes: [],
+            createdAt: new Date().toISOString(),
+          },
+        );
+      }
+    }
+
+    // Render streaming or thinking assistant message immediately
+    if (streaming !== null) {
+      result.push(streamingAsMessage(streaming));
+    } else if (pendingQuestion !== null || createChat.isPending) {
+      result.push({
+        id: 'optimistic-assistant-thinking',
+        role: 'ASSISTANT',
+        content: '',
+        status: 'STREAMING',
+        answerStatus: null,
+        mode: pendingQuestion?.mode ?? 'RETRIEVAL',
+        coverage: null,
+        documentCoverage: [],
+        errorCode: null,
+        quotes: [],
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    return result;
+  }, [
+    chat.data?.messages,
+    streaming,
+    optimisticUserMessage,
+    pendingQuestion,
+    createChat.isPending,
+  ]);
 
   const lastAnswer = [...(chat.data?.messages ?? [])].reverse().find((m) => m.role === 'ASSISTANT');
   const offerThoroughSearch =
@@ -97,18 +166,71 @@ export function ChatPanel({
     lastAnswer.coverage?.complete === false;
 
   const isBusy = isStreaming || createChat.isPending;
+  const chatList = chats.data ?? [];
+  const currentChat = chatList.find((c) => c.id === activeChatId);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border bg-surface px-3 py-2">
-        <ChatHistoryList
-          chats={chats.data ?? []}
-          activeChatId={activeChatId}
-          onSelect={setActiveChatId}
-          onNew={() => setActiveChatId(null)}
-        />
+    <div className="flex h-full min-h-0 flex-col bg-surface">
+      {/* Sleek Top Bar with New Analysis and History Drawer */}
+      <div className="relative border-b border-border bg-surface px-4 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
+            <span className="truncate text-small font-semibold text-fg">
+              {currentChat ? currentChat.title ?? 'Active Analysis' : 'New Analysis'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {chatList.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowHistory((prev) => !prev)}
+                className="h-8 gap-1.5 text-fg-muted hover:text-fg text-caption"
+              >
+                <History className="h-3.5 w-3.5" />
+                <span>History ({chatList.length})</span>
+                <ChevronDown className={`h-3 w-3 transition-transform ${showHistory ? 'rotate-180' : ''}`} />
+              </Button>
+            )}
+
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setActiveChatId(null);
+                setShowHistory(false);
+              }}
+              className="h-8 gap-1 border-border text-primary hover:bg-primary-subtle text-caption"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>New Chat</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Dropdown Floating History Popover */}
+        {showHistory && (
+          <div className="absolute left-2 right-2 top-full z-30 mt-1">
+            <ChatHistoryList
+              chats={chatList}
+              activeChatId={activeChatId}
+              onSelect={(id) => {
+                setActiveChatId(id);
+                setShowHistory(false);
+              }}
+              onNew={() => {
+                setActiveChatId(null);
+                setShowHistory(false);
+              }}
+              onClose={() => setShowHistory(false)}
+            />
+          </div>
+        )}
       </div>
 
+      {/* Main Conversation Stream */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-slim p-4">
         {chat.isError && (
           <ErrorState
@@ -119,12 +241,47 @@ export function ChatPanel({
 
         {activeChatId !== null && chat.isPending && <LoadingState message={copy.common.loading} />}
 
+        {/* High-End Welcome State with Instant Starter Questions */}
         {messages.length === 0 && !chat.isPending && !isBusy && (
-          <EmptyState
-            icon={<MessageSquare className="h-6 w-6" />}
-            title={copy.chat.empty.title}
-            description={copy.chat.empty.description}
-          />
+          <div className="my-auto flex flex-col items-center justify-center py-6 text-center">
+            <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary shadow-xs">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <h3 className="text-body font-semibold text-fg">AI Contract Analyst</h3>
+            <p className="max-w-xs mt-1 text-caption text-fg-muted">
+              Every answer is verified against original document text with coordinate-accurate citation jumping.
+            </p>
+
+            <div className="mt-6 flex w-full max-w-sm flex-col gap-2.5 text-left">
+              <span className="text-micro font-semibold uppercase tracking-wider text-fg-subtle">
+                Suggested Prompts
+              </span>
+              {STARTER_PROMPTS.map((item, idx) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleSend(item.prompt, { thorough: item.thorough })}
+                    className="group flex items-start gap-2.5 rounded-lg border border-border bg-surface-muted/60 p-2.5 transition-all hover:border-primary/40 hover:bg-surface-hover hover:shadow-xs"
+                  >
+                    <Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary transition-transform group-hover:scale-110" />
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-caption font-semibold text-fg">{item.title}</span>
+                        <span className="rounded bg-primary-subtle px-1.5 py-0.5 text-micro font-medium text-primary">
+                          {item.tag}
+                        </span>
+                      </div>
+                      <span className="truncate text-caption text-fg-muted mt-0.5">
+                        {item.prompt}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
 
         {messages.length > 0 && (
@@ -136,11 +293,6 @@ export function ChatPanel({
           />
         )}
 
-        {/**
-         * Cost-aware escalation (ARCHITECTURE section 6): after a "not found" from a partial
-         * read, the user is OFFERED a whole-document search rather than having one run
-         * automatically and silently spend tokens.
-         */}
         {offerThoroughSearch && (
           <div className="mt-4 flex justify-center">
             <Button
@@ -153,14 +305,20 @@ export function ChatPanel({
                 if (question !== undefined) void send(question, { mode: 'THOROUGH' });
               }}
             >
-              <Search className="h-3.5 w-3.5" aria-hidden="true" />
+              <Search className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
               {copy.chat.searchWholeDocument}
             </Button>
           </div>
         )}
       </div>
 
-      <ChatInput onSend={handleSend} onStop={stop} isStreaming={isStreaming} disabled={createChat.isPending} />
+      {/* Input Form */}
+      <ChatInput
+        onSend={handleSend}
+        onStop={stop}
+        isStreaming={isStreaming}
+        disabled={createChat.isPending}
+      />
     </div>
   );
 }

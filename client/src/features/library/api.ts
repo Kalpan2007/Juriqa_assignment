@@ -35,6 +35,9 @@ export const libraryApi = {
     return apiRequest('/documents', { method: 'POST', body, schema: uploadResponseSchema });
   },
 
+  seedSamples: (): Promise<{ seeded: DocumentDto[]; count: number }> =>
+    api.post('/documents/seed-samples', z.any()),
+
   remove: (id: string) => api.delete(`/documents/${id}`),
 
   layout: (id: string): Promise<DocumentLayoutDto> =>

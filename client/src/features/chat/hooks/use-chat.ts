@@ -82,15 +82,31 @@ const EMPTY_STREAM: StreamingAnswer = {
 export function useSendMessage(chatId: string | null, documentId: string) {
   const queryClient = useQueryClient();
   const [streaming, setStreaming] = useState<StreamingAnswer | null>(null);
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState<MessageDto | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const send = useCallback(
     async (content: string, options?: { mode?: RetrievalMode }) => {
       if (chatId === null) return;
 
+      const userMsg: MessageDto = {
+        id: `optimistic-user-${Date.now()}`,
+        role: 'USER',
+        content,
+        status: 'DONE',
+        answerStatus: null,
+        mode: options?.mode ?? 'RETRIEVAL',
+        coverage: null,
+        documentCoverage: [],
+        errorCode: null,
+        quotes: [],
+        createdAt: new Date().toISOString(),
+      };
+      setOptimisticUserMessage(userMsg);
+
       const controller = new AbortController();
       abortRef.current = controller;
-      setStreaming({ ...EMPTY_STREAM });
+      setStreaming({ ...EMPTY_STREAM, mode: options?.mode ?? 'RETRIEVAL' });
 
       const apply = (update: (previous: StreamingAnswer) => StreamingAnswer) => {
         setStreaming((previous) => update(previous ?? { ...EMPTY_STREAM }));
@@ -163,6 +179,7 @@ export function useSendMessage(chatId: string | null, documentId: string) {
         await queryClient.invalidateQueries({ queryKey: chatKeys.detail(chatId) });
         void queryClient.invalidateQueries({ queryKey: chatKeys.forDocument(documentId) });
         setStreaming(null);
+        setOptimisticUserMessage(null);
       }
     },
     [chatId, documentId, queryClient],
@@ -173,7 +190,13 @@ export function useSendMessage(chatId: string | null, documentId: string) {
     abortRef.current?.abort();
   }, []);
 
-  return { send, stop, streaming, isStreaming: streaming !== null && !streaming.finished };
+  return {
+    send,
+    stop,
+    streaming,
+    isStreaming: streaming !== null && !streaming.finished,
+    optimisticUserMessage,
+  };
 }
 
 /** The streamed answer rendered as a message, so one component can display both. */

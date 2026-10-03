@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import fs from 'node:fs';
+import path from 'node:path';
 import type {
   DocumentDto,
   DocumentLayoutDto,
@@ -286,5 +288,54 @@ export class DocumentsService {
       createdAt: document.createdAt.toISOString(),
       updatedAt: document.updatedAt.toISOString(),
     };
+  }
+
+  async seedSamples(): Promise<{ seeded: DocumentDto[]; count: number }> {
+    const candidateDirs = [
+      path.resolve(process.cwd(), 'TEST_FILES'),
+      path.resolve(process.cwd(), '../TEST_FILES'),
+      path.resolve(__dirname, '../../../../TEST_FILES'),
+      path.resolve(__dirname, '../../fixtures'),
+    ];
+    const testDir = candidateDirs.find((d) => fs.existsSync(d));
+    if (!testDir) {
+      throw AppError.notFound('NOT_FOUND', 'Could not locate sample contracts directory.');
+    }
+
+    const sampleFilenames = [
+      '01-facility-agreement-162p.pdf',
+      '10-msa-v1.docx',
+      '11-msa-v2.docx',
+      '20-nda-mutual.pdf',
+      '30-scanned-full.pdf',
+    ];
+
+    const seeded: DocumentDto[] = [];
+
+    for (const filename of sampleFilenames) {
+      const filePath = path.join(testDir, filename);
+      if (!fs.existsSync(filePath)) continue;
+
+      const buffer = fs.readFileSync(filePath);
+      const hash = sha256(buffer);
+      const existing = await this.repository.findBySha256(hash);
+      if (existing) {
+        seeded.push(this.toDto(existing));
+        continue;
+      }
+
+      try {
+        const res = await this.upload({
+          originalname: filename,
+          buffer,
+          size: buffer.length,
+        });
+        seeded.push(res.document);
+      } catch (err) {
+        this.logger.warn({ filename, err }, 'Failed to seed sample contract');
+      }
+    }
+
+    return { seeded, count: seeded.length };
   }
 }

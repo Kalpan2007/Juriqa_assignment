@@ -15,67 +15,67 @@ export const tokens = {
   color: {
     light: {
       // --- surfaces ---------------------------------------------------------
-      bg: '#faf9f7', // warm paper, not clinical white
+      bg: '#f8fafc', // ultra-clean modern workspace surface
       surface: '#ffffff',
-      surfaceMuted: '#f3f1ed', // sidebar, table headers
-      surfaceHover: '#eceae5',
-      border: '#e2ded7',
-      borderStrong: '#cdc7bd',
+      surfaceMuted: '#f1f5f9', // sidebar, table headers, secondary areas
+      surfaceHover: '#f1f5f9',
+      border: '#e2e8f0',
+      borderStrong: '#cbd5e1',
 
       // --- text -------------------------------------------------------------
-      fg: '#1c1917', // deep ink
-      fgMuted: '#6b645c',
-      fgSubtle: '#9a938a',
+      fg: '#0f172a', // deep rich slate
+      fgMuted: '#475569',
+      fgSubtle: '#94a3b8',
       fgOnAccent: '#ffffff',
 
       // --- accent -----------------------------------------------------------
-      primary: '#1e4d4a', // deep teal: serious, not corporate blue
-      primaryHover: '#163b39',
+      primary: '#0f766e', // executive deep teal/emerald
+      primaryHover: '#115e59',
       primaryFg: '#ffffff',
-      primarySubtle: '#e8efee',
-      focusRing: '#1e4d4a',
+      primarySubtle: '#f0fdfa',
+      focusRing: '#0f766e',
 
       // --- quote verification (the heart of the product) --------------------
-      verified: '#1f6f43',
-      verifiedBg: '#e9f4ed',
-      verifiedBorder: '#bfdfcd',
-      unverified: '#9a5b00',
-      unverifiedBg: '#fdf3e3',
-      unverifiedBorder: '#f0dcb8',
+      verified: '#059669',
+      verifiedBg: '#ecfdf5',
+      verifiedBorder: '#a7f3d0',
+      unverified: '#d97706',
+      unverifiedBg: '#fffbeb',
+      unverifiedBorder: '#fde68a',
 
       // --- feedback ---------------------------------------------------------
-      danger: '#9f2d20',
-      dangerBg: '#fbecea',
-      dangerBorder: '#f0cdc8',
-      warning: '#9a5b00',
-      warningBg: '#fdf3e3',
-      success: '#1f6f43',
-      successBg: '#e9f4ed',
+      danger: '#dc2626',
+      dangerBg: '#fef2f2',
+      dangerBorder: '#fecaca',
+      warning: '#d97706',
+      warningBg: '#fffbeb',
+      success: '#059669',
+      successBg: '#ecfdf5',
 
       // --- comparison severity ---------------------------------------------
-      severityHigh: '#9f2d20',
-      severityHighBg: '#fbecea',
-      severityMedium: '#9a5b00',
-      severityMediumBg: '#fdf3e3',
-      severityLow: '#6b645c',
-      severityLowBg: '#f3f1ed',
+      severityHigh: '#dc2626',
+      severityHighBg: '#fef2f2',
+      severityMedium: '#d97706',
+      severityMediumBg: '#fffbeb',
+      severityLow: '#64748b',
+      severityLowBg: '#f1f5f9',
 
       // --- document processing status ---------------------------------------
-      statusUploaded: '#6b645c',
-      statusProcessing: '#8a5a00',
-      statusReady: '#1f6f43',
-      statusFailed: '#9f2d20',
+      statusUploaded: '#64748b',
+      statusProcessing: '#d97706',
+      statusReady: '#059669',
+      statusFailed: '#dc2626',
 
       // --- citation highlighting in the viewer ------------------------------
-      highlight: '#ffe9a8',
-      highlightActive: '#ffcf4d',
-      highlightBorder: '#e0a800',
+      highlight: '#fef08a',
+      highlightActive: '#fde047',
+      highlightBorder: '#ca8a04',
 
       // --- diffs ------------------------------------------------------------
-      diffInsert: '#1f6f43',
-      diffInsertBg: '#dff0e5',
-      diffDelete: '#9f2d20',
-      diffDeleteBg: '#fbe0dc',
+      diffInsert: '#059669',
+      diffInsertBg: '#ecfdf5',
+      diffDelete: '#dc2626',
+      diffDeleteBg: '#fef2f2',
     },
 
     dark: {
@@ -152,6 +152,8 @@ export const tokens = {
     body: { size: '0.9375rem', lineHeight: '1.5rem', weight: '400', tracking: '0' },
     small: { size: '0.875rem', lineHeight: '1.25rem', weight: '400', tracking: '0' },
     caption: { size: '0.8125rem', lineHeight: '1.125rem', weight: '400', tracking: '0.005em' },
+    /** Smallest labels, badges, timestamps: ~11px. */
+    micro: { size: '0.6875rem', lineHeight: '1rem', weight: '400', tracking: '0.01em' },
     /** Document reading view. */
     document: { size: '1rem', lineHeight: '1.75rem', weight: '400', tracking: '0' },
   },
@@ -202,7 +204,7 @@ export const tokens = {
   },
 
   layout: {
-    sidebarWidth: '248px',
+    sidebarWidth: '268px',
     chatPanelMin: '380px',
     viewerMin: '420px',
     contentMax: '1600px',

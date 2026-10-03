@@ -80,16 +80,15 @@ export function QuoteChip({
 
   const toneClasses =
     quote.status === 'VERIFIED'
-      ? 'border-verified-border bg-verified-bg text-verified'
-      : 'border-unverified-border bg-unverified-bg text-unverified';
+      ? 'border-verified-border bg-verified-bg/70 text-verified'
+      : 'border-unverified-border bg-unverified-bg/70 text-unverified';
 
   if (!clickable) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className={cn('w-full rounded-md border px-3 py-2 text-left', toneClasses)}
-            // Not a button: an unverified quote must not look as if it leads anywhere.
+            className={cn('w-full rounded-lg border p-3 text-left shadow-xs', toneClasses)}
             aria-disabled="true"
           >
             {label}
@@ -105,20 +104,37 @@ export function QuoteChip({
   }
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={() => onOpen(quote)}
-          className={cn(
-            'w-full cursor-pointer rounded-md border px-3 py-2 text-left transition-colors hover:bg-surface-hover',
-            toneClasses,
-          )}
-        >
-          {label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{copy.chat.quote.verifiedHint}</TooltipContent>
-    </Tooltip>
+    <div
+      onClick={() => onOpen(quote)}
+      className={cn(
+        'group relative w-full cursor-pointer rounded-lg border p-3 text-left transition-all shadow-xs hover:border-primary hover:shadow-sm',
+        toneClasses,
+      )}
+    >
+      <div className="flex flex-col gap-2">
+        {label}
+
+        {/* High-visibility Action Button for Feature 5 (Citation Highlighting) */}
+        {quote.status === 'VERIFIED' && (
+          <div className="mt-1 flex items-center justify-between border-t border-verified-border/60 pt-2">
+            <span className="flex items-center gap-1.5 text-micro font-medium text-verified">
+              <span className="h-1.5 w-1.5 rounded-full bg-verified animate-pulse" />
+              Coordinate Match Ready
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen(quote);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md bg-verified px-2.5 py-1 text-caption font-semibold text-white shadow-xs transition-transform hover:scale-105 active:scale-95"
+            >
+              <span>📍 Highlight in Contract</span>
+              <span className="text-micro opacity-80">→</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

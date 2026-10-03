@@ -49,6 +49,11 @@ export class DocumentsController {
     return this.documents.upload(file);
   }
 
+  @Post('seed-samples')
+  async seedSamples(): Promise<{ seeded: DocumentDto[]; count: number }> {
+    return this.documents.seedSamples();
+  }
+
   @Get()
   async list(): Promise<{ documents: DocumentDto[] }> {
     return { documents: await this.documents.list() };

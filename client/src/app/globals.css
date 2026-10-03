@@ -86,6 +86,7 @@
   --text-body: var(--text-body);
   --text-small: var(--text-small);
   --text-caption: var(--text-caption);
+  --text-micro: var(--text-micro);
   --text-document: var(--text-document);
 
   /* radii and shadows */
@@ -160,3 +161,16 @@
     height: var(--layout-workspace-height);
   }
 }
+
+@utility split-pane-viewer {
+  @media (width >= 64rem) {
+    min-width: var(--layout-viewer-min);
+  }
+}
+
+@utility split-pane-chat {
+  @media (width >= 64rem) {
+    min-width: var(--layout-chat-panel-min);
+  }
+}
+

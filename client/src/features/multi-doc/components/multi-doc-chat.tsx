@@ -21,7 +21,7 @@ export function MultiDocChat() {
   }, [documentsQuery.data]);
 
   const chat = useChat(activeChatId);
-  const { send, stop, streaming, isStreaming } = useSendMessage(
+  const { send, stop, streaming, isStreaming, optimisticUserMessage } = useSendMessage(
     activeChatId,
     selectedIds[0] ?? '',
   );
@@ -60,9 +60,23 @@ export function MultiDocChat() {
 
   const messages = useMemo<MessageDto[]>(() => {
     const saved = chat.data?.messages ?? [];
-    if (streaming === null) return saved;
-    return [...saved, streamingAsMessage(streaming)];
-  }, [chat.data?.messages, streaming]);
+    const result = [...saved];
+
+    if (optimisticUserMessage) {
+      const alreadySaved = saved.some(
+        (m) => m.role === 'USER' && m.content === optimisticUserMessage.content,
+      );
+      if (!alreadySaved) {
+        result.push(optimisticUserMessage);
+      }
+    }
+
+    if (streaming !== null) {
+      result.push(streamingAsMessage(streaming));
+    }
+
+    return result;
+  }, [chat.data?.messages, streaming, optimisticUserMessage]);
 
   const handleSend = (content: string) => {
     if (activeChatId === null) return;

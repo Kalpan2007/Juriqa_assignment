@@ -12,16 +12,14 @@ export function SplitPane({ left, right }: { left: ReactNode; right: ReactNode }
   return (
     <div className="workspace-split-height flex min-h-0 flex-col gap-4 lg:flex-row">
       <section
-        className="min-h-0 flex-1 overflow-hidden rounded-card border border-border bg-surface"
-        style={{ minWidth: 'var(--layout-viewer-min)' }}
+        className="split-pane-viewer min-h-0 w-full flex-1 overflow-hidden rounded-card border border-border bg-surface lg:w-auto"
         aria-label="Document"
       >
         {left}
       </section>
 
       <section
-        className="flex min-h-0 flex-col overflow-hidden rounded-card border border-border bg-surface lg:w-2/5"
-        style={{ minWidth: 'var(--layout-chat-panel-min)' }}
+        className="split-pane-chat flex min-h-0 w-full flex-col overflow-hidden rounded-card border border-border bg-surface lg:w-2/5"
         aria-label="Chat"
       >
         {right}

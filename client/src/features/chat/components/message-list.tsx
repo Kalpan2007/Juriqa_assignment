@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Sparkles } from 'lucide-react';
 import type { MessageDto, QuoteDto } from '@ca/shared';
 import { resolveErrorMessage } from '@/content/error-messages';
 import { copy } from '@/content/copy';
@@ -61,7 +61,7 @@ function UserMessage({ message }: { message: MessageDto }) {
   return (
     <div className="flex justify-end">
       <div
-        className="rounded-card bg-primary-subtle px-4 py-2.5 text-body text-fg"
+        className="rounded-2xl rounded-tr-xs bg-primary px-4 py-2.5 text-body text-primary-fg shadow-xs leading-relaxed"
         style={{ maxWidth: 'var(--layout-message-max)' }}
       >
         {message.content}
@@ -120,22 +120,51 @@ function AssistantMessage({
           aria-live={isStreaming ? 'polite' : 'off'}
           aria-busy={isStreaming}
         >
-          <AnswerText
-            text={message.content}
-            quotes={message.quotes}
-            onOpenQuote={onOpenQuote}
-          />
+          {/* Animated Thinking State when stream or pending question is active before first token */}
           {isStreaming && !hasText && (
-            <span className="inline-flex items-center gap-2 text-small text-fg-muted">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              {copy.chat.thinking}
-            </span>
+            <div className="flex flex-col gap-2.5 py-1">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary animate-pulse">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-small font-medium text-fg">
+                    {message.mode === 'THOROUGH' ? 'Scanning All Pages' : 'Analyzing Contract'}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '150ms' }} />
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" style={{ animationDelay: '300ms' }} />
+                  </span>
+                </div>
+              </div>
+              <div className="ml-9 rounded-lg border border-border bg-surface-muted/60 px-3.5 py-2 text-caption text-fg-muted">
+                <p className="flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                  <span>
+                    {message.mode === 'THOROUGH'
+                      ? 'Scanning entire agreement pages to verify clauses & prove absence...'
+                      : 'Retrieving relevant clauses, cross-referencing citations & verifying quotes...'}
+                  </span>
+                </p>
+              </div>
+            </div>
           )}
-          {isStreaming && hasText && (
-            <span
-              className={cn('ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-fg-subtle align-middle')}
-              aria-hidden="true"
-            />
+
+          {hasText && (
+            <>
+              <AnswerText
+                text={message.content}
+                quotes={message.quotes}
+                onOpenQuote={onOpenQuote}
+              />
+              {isStreaming && (
+                <span
+                  className={cn('ml-1 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle')}
+                  aria-hidden="true"
+                />
+              )}
+            </>
           )}
         </div>
       )}
