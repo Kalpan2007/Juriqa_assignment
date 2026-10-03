@@ -22,9 +22,33 @@ async function bootstrap(): Promise<void> {
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
 
-  // Exactly one origin, from config (ARCHITECTURE section 3.3).
+  // CORS configuration supporting single origin, comma-separated list, wildcard, and *.vercel.app
+  const configuredOrigin = config.webOrigin.trim();
+  const allowedList = configuredOrigin === '*'
+    ? ['*']
+    : configuredOrigin.split(',').map((o) => o.trim().replace(/\/+$/, ''));
+
   app.enableCors({
-    origin: config.webOrigin,
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => {
+      // Allow non-browser requests (curl, server-to-server, health checks)
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      if (
+        allowedList.includes('*') ||
+        allowedList.includes(origin) ||
+        origin.endsWith('.vercel.app') ||
+        origin.includes('localhost')
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
     credentials: false,
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'x-request-id'],

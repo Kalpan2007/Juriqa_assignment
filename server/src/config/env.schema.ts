@@ -21,8 +21,8 @@ export const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
-  /** The single browser origin allowed by CORS. No trailing slash. */
-  WEB_ORIGIN: z.url(),
+  /** Browser origin(s) allowed by CORS. Can be a single URL, comma-separated URLs, or '*'. */
+  WEB_ORIGIN: z.string().min(1).default('http://localhost:3000'),
 
   // --- database ------------------------------------------------------------
   /**

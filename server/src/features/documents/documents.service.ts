@@ -35,7 +35,7 @@ export class DocumentsService {
     private readonly storage: StorageService,
     private readonly queue: QueueService,
     private readonly config: AppConfigService,
-  ) {}
+  ) { }
 
   async upload(file: { originalname: string; buffer: Buffer; size: number }): Promise<UploadResponseDto> {
     // Size is checked before anything else: no point hashing 400 MB to then reject it.
