@@ -69,3 +69,41 @@ export function clampRange(range: TextRange, length: number): TextRange | null {
   const end = Math.min(Math.max(range.end, 0), length);
   return start < end ? { start, end } : null;
 }
+
+export interface PageBoundary {
+  pageNumber: number;
+  startOffset: number;
+  endOffset: number;
+}
+
+export interface PageRangeSegment {
+  pageNumber: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * Splits a text range across pages when a quote spans across page boundaries (ARCHITECTURE section 8).
+ */
+export function splitRangeByPage(
+  range: TextRange,
+  pages: readonly PageBoundary[],
+): PageRangeSegment[] {
+  const segments: PageRangeSegment[] = [];
+
+  for (const page of pages) {
+    if (rangesOverlap(range, { start: page.startOffset, end: page.endOffset })) {
+      const overlap = intersectRanges(range, { start: page.startOffset, end: page.endOffset });
+      if (overlap !== null && !isEmptyRange(overlap)) {
+        segments.push({
+          pageNumber: page.pageNumber,
+          start: overlap.start,
+          end: overlap.end,
+        });
+      }
+    }
+  }
+
+  return segments;
+}
+

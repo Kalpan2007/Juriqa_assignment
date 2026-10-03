@@ -8,6 +8,7 @@ import {
   rangeContains,
   rangeLength,
   rangesOverlap,
+  splitRangeByPage,
 } from './offsets';
 
 describe('rangeLength / isEmptyRange', () => {
@@ -125,3 +126,34 @@ describe('compareRanges', () => {
     ]);
   });
 });
+
+describe('splitRangeByPage', () => {
+  const pages = [
+    { pageNumber: 1, startOffset: 0, endOffset: 100 },
+    { pageNumber: 2, startOffset: 100, endOffset: 200 },
+    { pageNumber: 3, startOffset: 200, endOffset: 300 },
+  ];
+
+  it('splits a quote spanning across two pages', () => {
+    const result = splitRangeByPage({ start: 80, end: 150 }, pages);
+    expect(result).toEqual([
+      { pageNumber: 1, start: 80, end: 100 },
+      { pageNumber: 2, start: 100, end: 150 },
+    ]);
+  });
+
+  it('keeps a single-page quote on its page', () => {
+    const result = splitRangeByPage({ start: 120, end: 180 }, pages);
+    expect(result).toEqual([{ pageNumber: 2, start: 120, end: 180 }]);
+  });
+
+  it('splits a quote spanning across three pages', () => {
+    const result = splitRangeByPage({ start: 50, end: 250 }, pages);
+    expect(result).toEqual([
+      { pageNumber: 1, start: 50, end: 100 },
+      { pageNumber: 2, start: 100, end: 200 },
+      { pageNumber: 3, start: 200, end: 250 },
+    ]);
+  });
+});
+

@@ -11,6 +11,7 @@ import { ApiError } from '@/lib/api-client';
 import { copy } from '@/content/copy';
 import { useDocument, DocumentStatusBadge, DocumentWarnings } from '@/features/library';
 import { ChatPanel } from '@/features/chat';
+import { DocumentViewer } from '@/features/viewer';
 
 /**
  * The document workspace: the document on the left, chat on the right.
@@ -62,38 +63,17 @@ export function DocumentWorkspace({ documentId }: { documentId: string }) {
       <DocumentWarnings documentId={documentId} enabled={document.status === 'READY'} />
 
       <SplitPane
-        left={<ViewerPlaceholder activeQuote={activeQuote} />}
+        left={
+          <DocumentViewer
+            documentId={documentId}
+            kind={document.kind}
+            activeQuote={activeQuote}
+            onClearQuote={() => setActiveQuote(null)}
+          />
+        }
         right={<ChatPanel documentId={documentId} onOpenQuote={setActiveQuote} />}
       />
     </div>
   );
 }
 
-/**
- * Stands in for the viewer until slice F5.
- *
- * It deliberately shows the quote the user clicked and the offsets we found, so the chain
- * from answer to verified quote to document position is visible and testable before the
- * pdf.js renderer exists.
- */
-function ViewerPlaceholder({ activeQuote }: { activeQuote: QuoteDto | null }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-      <FileText className="h-6 w-6 text-fg-subtle" aria-hidden="true" />
-      <p className="text-small text-fg-muted">{copy.viewer.title}</p>
-
-      {activeQuote === null ? (
-        <p className="max-w-prose text-caption text-fg-subtle">
-          {copy.chat.quote.verifiedHint}
-        </p>
-      ) : (
-        <div className="max-w-prose rounded-md border border-highlight-border bg-highlight px-3 py-2 text-left">
-          <p className="text-small text-fg">{activeQuote.text}</p>
-          <p className="mt-1 font-mono text-caption text-fg-muted">
-            {activeQuote.matches.map((match) => `${match.start}–${match.end}`).join(', ')}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
