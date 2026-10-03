@@ -15,9 +15,9 @@
 
 ## 🔗 Live Deployments & Demo
 
-- 🌐 **Live Web Application:** [Contract Analyzer on Vercel](https://juriqa-assignment-client.vercel.app) *(or your deployed URL)*
-- ⚡ **Backend API Service:** [NestJS API on Render](https://juriqa-assignment-server.onrender.com) *(or your deployed URL)*
-- 🎥 **Video Walkthrough (Loom / YouTube):** [Watch 5-Minute Demo Video](https://www.loom.com/share/placeholder)
+- 🌐 **Live Web Application:** [https://juriqa-assignment-kappa.vercel.app](https://juriqa-assignment-kappa.vercel.app/)
+- ⚡ **Backend API Service:** [https://juriqa-assignment.onrender.com](https://juriqa-assignment.onrender.com) (Health: [https://juriqa-assignment.onrender.com/health/ready](https://juriqa-assignment.onrender.com/health/ready))
+- 🎥 **Video Walkthrough (YouTube):** [Watch Demo Video (https://youtu.be/hn4KR6n86Oo)](https://youtu.be/hn4KR6n86Oo)
 - 📁 **Sample Test Contracts:** Pre-bundled in [`TEST_FILES/`](./TEST_FILES/) (Facility agreement 162p, MSA v1 & v2, NDAs, scanned samples)
 
 ---
@@ -215,7 +215,7 @@ npm run dev -w @ca/client
    - `SUPABASE_URL`: Your Supabase project URL.
    - `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role secret.
    - `SUPABASE_STORAGE_BUCKET`: `contracts`
-   - `CLIENT_ORIGIN`: Your deployed Vercel frontend URL (e.g., `https://your-app.vercel.app`).
+   - `WEB_ORIGIN`: `https://juriqa-assignment-kappa.vercel.app` (or `*`)
    - `NODE_ENV`: `production`
 
 ---
@@ -229,7 +229,7 @@ npm run dev -w @ca/client
    - **Build Command:** `npm run build` (or leave default Next.js build)
    - **Output Directory:** `.next`
 3. Set **Environment Variables** in Vercel:
-   - `NEXT_PUBLIC_API_URL`: Your deployed Render backend URL (e.g. `https://juriqa-assignment-server.onrender.com`).
+   - `NEXT_PUBLIC_API_URL`: `https://juriqa-assignment.onrender.com`
 4. Click **Deploy**.
 
 ---
