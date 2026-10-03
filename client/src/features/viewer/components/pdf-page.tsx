@@ -66,6 +66,7 @@ export function PdfPage({
         renderTask = page.render({
           canvasContext: ctx,
           viewport,
+          canvas,
         });
 
         await renderTask.promise;
