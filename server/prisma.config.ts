@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { defineConfig, env } from 'prisma/config';
+import { defineConfig } from 'prisma/config';
 import dotenv from 'dotenv';
 
 /**
@@ -17,13 +17,17 @@ import dotenv from 'dotenv';
  */
 dotenv.config({ path: path.resolve(__dirname, '..', '.env'), quiet: true });
 
+const databaseUrl =
+  process.env.DATABASE_URL ||
+  'postgresql://postgres:postgres@localhost:5432/postgres?schema=public';
+
 export default defineConfig({
   schema: path.join('prisma', 'schema.prisma'),
   datasource: {
-    url: env('DATABASE_URL'),
+    url: databaseUrl,
     // Only needed if `prisma migrate dev` cannot create its shadow database (decision D15).
     ...(process.env.SHADOW_DATABASE_URL
-      ? { shadowDatabaseUrl: env('SHADOW_DATABASE_URL') }
+      ? { shadowDatabaseUrl: process.env.SHADOW_DATABASE_URL }
       : {}),
   },
 });
