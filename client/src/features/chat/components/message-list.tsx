@@ -151,14 +151,18 @@ function AssistantMessage({
             <QuoteChip
               key={`${quote.id}-${quote.citation}`}
               quote={quote}
-              showDocumentName={showDocumentNames}
+              showDocumentName={showDocumentNames || (message.documentCoverage?.length ?? 0) > 0}
               onOpen={onOpenQuote}
             />
           ))}
         </div>
       )}
 
-      <CoverageLine coverage={message.coverage} answerText={message.content} />
+      <CoverageLine
+        coverage={message.coverage}
+        documentCoverage={message.documentCoverage}
+        answerText={message.content}
+      />
     </div>
   );
 }

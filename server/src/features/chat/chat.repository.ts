@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type {
   AnswerStatus,
   CoverageDto,
+  DocumentCoverageDto,
   MatchKind,
   MessageStatus,
   QuoteStatus,
@@ -9,6 +10,8 @@ import type {
 } from '@ca/shared';
 import { Prisma, type Chat, type Message } from '../../../generated/prisma';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+
+export type MessageCoverageInput = CoverageDto | { documentCoverage: DocumentCoverageDto[] } | null;
 
 /** All Prisma access for Chat, ChatDocument, Message and Quote. */
 
@@ -124,7 +127,7 @@ export class ChatRepository {
   async addAssistantMessage(
     chatId: string,
     mode: RetrievalMode,
-    coverage: CoverageDto | null,
+    coverage: MessageCoverageInput,
   ): Promise<Message> {
     return this.prisma.message.create({
       data: {
@@ -149,7 +152,7 @@ export class ChatRepository {
     content: string;
     status: MessageStatus;
     answerStatus: AnswerStatus | null;
-    coverage: CoverageDto | null;
+    coverage: MessageCoverageInput;
     errorCode?: string | null;
     quotes: PersistQuoteInput[];
   }): Promise<void> {

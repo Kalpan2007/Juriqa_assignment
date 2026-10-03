@@ -3,28 +3,40 @@ import type {
   ChatDto,
   ChatSummaryDto,
   CoverageDto,
+  DocumentCoverageDto,
   MessageDto,
   QuoteDto,
   SendMessageInput,
   SseEvent,
 } from '@ca/shared';
 import { MAX_CHAT_DOCUMENTS } from '@ca/shared';
+import { AppConfigService } from '../../config/config.service';
 import { AppError } from '../../core/errors/app-error';
 import type { SseWriter } from '../../core/sse/sse-writer';
 import { LlmService } from '../../infrastructure/llm/llm.service';
 import { DocumentsService } from '../documents/documents.service';
 import { RetrievalService, type SearchedChunk } from '../retrieval/retrieval.service';
+import {
+  computeBudget,
+  splitBudgetAcrossDocuments,
+  MIN_EXCERPT_TOKENS,
+} from '../retrieval/domain/budgeter';
 import { QuoteVerifierService } from '../verification/quote-verifier.service';
 import { ChatRepository, type ChatWithRelations, type MessageWithQuotes, type PersistQuoteInput } from './chat.repository';
 import { AnswerStreamParser } from './domain/answer-stream-parser';
 import { deriveAnswerStatus } from './domain/answer-status';
 import { buildHistoryText, previousUserQuestion, type HistoryTurn } from './domain/history-builder';
-import { parseQuotePayload } from './domain/quote-payload';
+import { parseQuotePayload, type RawQuote } from './domain/quote-payload';
 import {
   buildAnswerSystemPrompt,
   buildAnswerUserPrompt,
   renderExcerpts,
 } from './prompts/answer.prompt';
+import {
+  buildMultiDocSystemPrompt,
+  buildMultiDocUserPrompt,
+  type MultiDocPromptDocument,
+} from './prompts/multi-doc.prompt';
 import {
   buildThoroughReduceSystemPrompt,
   buildThoroughReduceUserPrompt,
@@ -61,6 +73,7 @@ export class ChatService {
     private readonly verifier: QuoteVerifierService,
     private readonly llm: LlmService,
     private readonly thorough: ThoroughRunner,
+    private readonly config: AppConfigService,
   ) {}
 
   async createChat(documentIds: readonly string[]): Promise<ChatSummaryDto> {
@@ -123,13 +136,15 @@ export class ChatService {
   ): Promise<void> {
     const chat = await this.requireChat(chatId);
 
-    if (chat.documents.length !== 1) {
-      // Multi-document chat arrives in slice F6; until then this path is single-document.
-      throw AppError.badRequest(
-        'BAD_REQUEST',
-        'Asking across several documents is not available yet.',
-      );
+    if (chat.documents.length === 0) {
+      throw AppError.badRequest('NO_DOCUMENTS_SELECTED', 'This chat has no documents.');
     }
+
+    if (chat.documents.length > 1) {
+      await this.sendMessageMultiDoc(chat, input, writer, signal);
+      return;
+    }
+
     const chatDocument = chat.documents[0];
     if (chatDocument === undefined) {
       throw AppError.badRequest('NO_DOCUMENTS_SELECTED', 'This chat has no documents.');
@@ -499,6 +514,308 @@ export class ChatService {
   }
 
   /**
+   * Answers across multiple documents (slice F6).
+   *
+   * Splits retrieval budget evenly across all documents, retrieves excerpts for each,
+   * streams comparative answer by topic, and strictly verifies each quote against the specific
+   * document alias (D1, D2, ...) it was attributed to.
+   */
+  private async sendMessageMultiDoc(
+    chat: ChatWithRelations,
+    input: SendMessageInput,
+    writer: SseWriter<SseEvent>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const docRecords = await Promise.all(
+      chat.documents.map((link) => this.documents.getReadyDocument(link.documentId)),
+    );
+
+    const history = await this.loadHistory(chat.id);
+    const historyText = buildHistoryText(history);
+
+    await this.repository.addUserMessage(chat.id, input.content);
+    await this.repository.setTitleIfEmpty(chat.id, input.content);
+
+    const initialPromptDocs: MultiDocPromptDocument[] = chat.documents.map((link, idx) => ({
+      id: link.documentId,
+      name: docRecords[idx]?.name ?? 'Document',
+      alias: link.alias,
+      excerpts: '',
+      coverageComplete: false,
+      skippedPages: [],
+    }));
+
+    const dummySysPrompt = buildMultiDocSystemPrompt({
+      documents: initialPromptDocs,
+      question: input.content,
+      historyText,
+    });
+
+    const totalBudget = computeBudget({
+      maxInputTokens: this.config.llm.maxInputTokens,
+      systemPromptText: dummySysPrompt,
+      historyText,
+      questionText: input.content,
+    });
+
+    const { perDocument: perDocBudget } = splitBudgetAcrossDocuments(
+      totalBudget.excerptTokens,
+      chat.documents.length,
+      MIN_EXCERPT_TOKENS,
+    );
+
+    const retrievalResults = await Promise.all(
+      chat.documents.map((link) =>
+        this.retrieval.retrieve({
+          documentId: link.documentId,
+          question: input.content,
+          previousQuestion: previousUserQuestion(history),
+          requestedMode: 'RETRIEVAL',
+          systemPromptText: dummySysPrompt,
+          historyText,
+          excerptTokenLimit: perDocBudget > 0 ? perDocBudget : undefined,
+        }),
+      ),
+    );
+
+    const documentCoverage: DocumentCoverageDto[] = chat.documents
+      .map((link, idx) => {
+        const result = retrievalResults[idx];
+        if (!result) return null;
+        return {
+          documentId: link.documentId,
+          documentName: docRecords[idx]?.name ?? 'Document',
+          alias: link.alias,
+          coverage: result.coverage,
+        };
+      })
+      .filter((item): item is DocumentCoverageDto => item !== null);
+
+    const assistant = await this.repository.addAssistantMessage(
+      chat.id,
+      'RETRIEVAL',
+      { documentCoverage },
+    );
+
+    writer.send({
+      type: 'meta',
+      messageId: assistant.id,
+      mode: 'RETRIEVAL',
+      coverage: null,
+      documentCoverage,
+    });
+
+    const totalChunks = retrievalResults.reduce((acc, r) => acc + r.chunks.length, 0);
+    if (totalChunks === 0) {
+      const msg =
+        'None of the compared documents appear to contain anything relevant to that question in the reviewed sections.';
+      writer.send({ type: 'delta', text: msg });
+      await this.repository.finishAssistantMessage({
+        messageId: assistant.id,
+        content: msg,
+        status: 'DONE',
+        answerStatus: 'NOT_FOUND',
+        coverage: { documentCoverage },
+        quotes: [],
+      });
+      writer.send({ type: 'quotes', quotes: [], coverage: null, documentCoverage });
+      writer.send({ type: 'done', status: 'DONE', answerStatus: 'NOT_FOUND' });
+      return;
+    }
+
+    const promptDocs: MultiDocPromptDocument[] = chat.documents
+      .map((link, idx) => {
+        const result = retrievalResults[idx];
+        if (!result) return null;
+        return {
+          id: link.documentId,
+          name: docRecords[idx]?.name ?? 'Document',
+          alias: link.alias,
+          excerpts: renderExcerpts(result.chunks),
+          coverageComplete: result.coverage.complete,
+          skippedPages: result.coverage.skippedPages,
+        };
+      })
+      .filter((item): item is MultiDocPromptDocument => item !== null);
+
+    const systemPrompt = buildMultiDocSystemPrompt({
+      documents: promptDocs,
+      question: input.content,
+      historyText,
+    });
+
+    const userPrompt = buildMultiDocUserPrompt({
+      documents: promptDocs,
+      question: input.content,
+      historyText,
+    });
+
+    const parser = new AnswerStreamParser();
+    let streamAborted = false;
+    let streamError: unknown = null;
+
+    try {
+      const result = await this.llm.stream({
+        purpose: 'chat.answer',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        maxOutputTokens: ANSWER_OUTPUT_TOKENS,
+        signal,
+        onDelta: (text) => {
+          const step = parser.push(text);
+          if (step.delta.length > 0) writer.send({ type: 'delta', text: step.delta });
+        },
+        onRetryNotice: (attempt, waitMs) => {
+          writer.send({
+            type: 'notice',
+            code: 'LLM_RATE_LIMITED',
+            message: `The AI service is busy. Retrying (attempt ${attempt}) in ${Math.ceil(waitMs / 1000)}s…`,
+          });
+        },
+      });
+
+      streamAborted = result.aborted;
+    } catch (error) {
+      streamError = error;
+    }
+
+    const final = parser.finish();
+    if (final.delta.length > 0 && !streamAborted) {
+      writer.send({ type: 'delta', text: final.delta });
+    }
+
+    if (streamError !== null) {
+      await this.finishWithError(assistant.id, parser.currentAnswer, streamError, writer);
+      return;
+    }
+
+    if (streamAborted) {
+      const content = final.answerText.length > 0 ? final.answerText : parser.currentAnswer;
+      await this.repository.finishAssistantMessage({
+        messageId: assistant.id,
+        content,
+        status: 'STOPPED',
+        answerStatus: 'PARTIAL',
+        coverage: { documentCoverage },
+        quotes: [],
+      });
+      await this.repository.touch(chat.id);
+      writer.send({ type: 'done', status: 'STOPPED', answerStatus: 'PARTIAL' });
+      return;
+    }
+
+    const payload = parseQuotePayload(final.quotesText);
+    if (payload.error !== null) {
+      writer.send({ type: 'notice', code: 'LLM_INVALID_RESPONSE', message: payload.error });
+    }
+
+    const docsByAlias = new Map<string, { id: string; name: string; fullText: string }>();
+    chat.documents.forEach((link, idx) => {
+      docsByAlias.set(link.alias.toUpperCase().trim(), {
+        id: link.documentId,
+        name: docRecords[idx]?.name ?? 'Document',
+        fullText: docRecords[idx]?.fullText ?? '',
+      });
+    });
+
+    const verified = this.verifyQuotesMultiDoc(docsByAlias, payload.quotes);
+    const answerStatus = deriveAnswerStatus({
+      messageStatus: 'DONE',
+      answerText: final.answerText,
+      quotes: verified.dtos,
+    });
+
+    await this.repository.finishAssistantMessage({
+      messageId: assistant.id,
+      content: final.answerText,
+      status: 'DONE',
+      answerStatus,
+      coverage: { documentCoverage },
+      quotes: verified.rows,
+    });
+    await this.repository.touch(chat.id);
+
+    writer.send({ type: 'quotes', quotes: verified.dtos, coverage: null, documentCoverage });
+    writer.send({ type: 'done', status: 'DONE', answerStatus });
+
+    this.logger.log(
+      {
+        chatId: chat.id,
+        documentCount: chat.documents.length,
+        answerStatus,
+        quotesOffered: payload.quotes.length,
+        quotesVerified: verified.dtos.filter((q) => q.status === 'VERIFIED').length,
+      },
+      'Multi-doc answer complete',
+    );
+  }
+
+  private verifyQuotesMultiDoc(
+    docsByAlias: Map<string, { id: string; name: string; fullText: string }>,
+    rawQuotes: ReadonlyArray<RawQuote>,
+  ): { dtos: QuoteDto[]; rows: PersistQuoteInput[] } {
+    const dtos: QuoteDto[] = [];
+    const rows: PersistQuoteInput[] = [];
+
+    rawQuotes.forEach((quote, index) => {
+      const aliasKey = quote.doc?.toUpperCase().trim() ?? '';
+      const doc = docsByAlias.get(aliasKey);
+
+      if (!doc) {
+        dtos.push({
+          id: `${index}`,
+          citation: quote.n,
+          text: quote.text,
+          status: 'UNVERIFIED',
+          documentId: null,
+          documentName: null,
+          matches: [],
+          matchKind: null,
+        });
+
+        rows.push({
+          citation: quote.n,
+          text: quote.text,
+          status: 'UNVERIFIED',
+          documentId: null,
+          matchKind: null,
+          matches: [],
+        });
+        return;
+      }
+
+      const result = this.verifier.verify(doc.id, doc.fullText, quote.text);
+      const isVerified = result.status === 'VERIFIED';
+      const matches = isVerified ? result.matches : [];
+      const matchKind = isVerified ? result.matchKind : null;
+
+      dtos.push({
+        id: `${index}`,
+        citation: quote.n,
+        text: quote.text,
+        status: result.status,
+        documentId: isVerified ? doc.id : null,
+        documentName: isVerified ? doc.name : null,
+        matches,
+        matchKind,
+      });
+
+      rows.push({
+        citation: quote.n,
+        text: quote.text,
+        status: result.status,
+        documentId: isVerified ? doc.id : null,
+        matchKind,
+        matches,
+      });
+    });
+
+    return { dtos, rows };
+  }
+
+  /**
    * Verifies every quote the model produced against the document it was attributed to.
    *
    * An unverified quote is KEPT rather than hidden, with its status, so the UI can show it
@@ -633,6 +950,19 @@ export class ChatService {
   }
 
   private toMessageDto(message: MessageWithQuotes): MessageDto {
+    const rawCoverage = message.coverage as Record<string, unknown> | null;
+    const isMultiDoc =
+      rawCoverage !== null &&
+      typeof rawCoverage === 'object' &&
+      Array.isArray(rawCoverage.documentCoverage);
+
+    const documentCoverage: DocumentCoverageDto[] = isMultiDoc
+      ? (rawCoverage.documentCoverage as DocumentCoverageDto[])
+      : [];
+    const coverage: CoverageDto | null = isMultiDoc
+      ? null
+      : ((message.coverage as CoverageDto | null) ?? null);
+
     return {
       id: message.id,
       role: message.role,
@@ -640,8 +970,8 @@ export class ChatService {
       status: message.status,
       answerStatus: message.answerStatus,
       mode: message.mode,
-      coverage: (message.coverage as CoverageDto | null) ?? null,
-      documentCoverage: [],
+      coverage,
+      documentCoverage,
       errorCode: message.errorCode,
       quotes: message.quotes.map((quote) => ({
         id: quote.id,

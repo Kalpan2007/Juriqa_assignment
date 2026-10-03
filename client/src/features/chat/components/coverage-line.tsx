@@ -1,7 +1,7 @@
 'use client';
 
 import { AlertTriangle, BookOpen } from 'lucide-react';
-import { needsCoverageWarning, type CoverageDto } from '@ca/shared';
+import { needsCoverageWarning, type CoverageDto, type DocumentCoverageDto } from '@ca/shared';
 import { copy, format } from '@/content/copy';
 
 /**
@@ -18,11 +18,44 @@ import { copy, format } from '@/content/copy';
  */
 export function CoverageLine({
   coverage,
+  documentCoverage,
   answerText,
 }: {
   coverage: CoverageDto | null;
+  documentCoverage?: DocumentCoverageDto[];
   answerText: string;
 }) {
+  if (documentCoverage && documentCoverage.length > 0) {
+    return (
+      <div className="mt-2 flex flex-col gap-1.5 text-caption text-fg-muted">
+        {documentCoverage.map((doc) => {
+          const showWarning = needsCoverageWarning(answerText, doc.coverage);
+          return (
+            <div key={doc.documentId} className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-fg">
+                {doc.alias}: {doc.documentName}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <BookOpen className="h-3 w-3" aria-hidden="true" />
+                {describeCoverage(doc.coverage)}
+              </span>
+
+              {showWarning && (
+                <span className="inline-flex items-center gap-1 rounded-pill border border-unverified-border bg-unverified-bg px-2 py-0.5 text-unverified">
+                  <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                  {format(copy.chat.coverage.basedOnPartial, {
+                    read: doc.coverage.chunksRead,
+                    total: doc.coverage.chunksTotal,
+                  })}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   if (coverage === null) return null;
 
   const showWarning = needsCoverageWarning(answerText, coverage);
