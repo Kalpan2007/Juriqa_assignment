@@ -165,3 +165,40 @@ Plus CI (typecheck, lint, test, build, secret scan) and `render.yaml`.
   rotation. The LLM has its own probe for diagnostics.
 - The pdf.js smoke test used a hand-built 2-line PDF. Real contracts with columns and embedded
   fonts are unproven until F1.
+
+## F1 — Document library (complete)
+- **Built:** Document upload, file sniffing (magic bytes for PDF `%PDF-` vs DOCX `PK\x03\x04`), scanned PDF detection (scanned vs partial scanned with warnings), DOCX virtual pagination via mammoth, document deletion and soft crash recovery.
+- **Verified:** 162-page facility agreement extracts with running header/footer stripped, scanned PDFs fail gracefully with `SCANNED_PDF`, password-protected and corrupt files properly rejected.
+
+## F2 — Verification engine (complete)
+- **Built:** Quote verification engine in `src/features/verification/`. Exact matching, whitespace/quote normalization, curly vs straight quote handling, hyphenated line break reconstruction across page boundaries, case-insensitive matchKind with user notes, and LRU cache eviction.
+- **Verified:** 100% test coverage matching all 11 test cases in `TEST_GUIDE.md` against `01-facility-agreement-162p.pdf`.
+
+## F3 — Ask one document (complete)
+- **Built:** Streaming chat using SSE (`/chats/:id/messages`), quote extraction from structured model output with delimiter protection, verification of quotes against document offsets, persistence of answers, unverified quote tracking (never dropped, explicitly flagged).
+- **Verified:** 13/13 e2e persistence tests, 8/8 verification tests, 8/8 formatting recovery tests green.
+
+## F4 — Whole-document reading / Thorough mode (complete)
+- **Built:** Thorough scan mode for absence questions ("Is there a non-compete?"). Scans every section with explicit chunk batches, tracks real progress (0 to 100%), verifies discovered quotes, reports PARTIAL coverage if interrupted or if pages are unreadable.
+- **Verified:** 7/7 e2e thorough tests green.
+
+## F5 — Citation highlighting (complete)
+- **Built:** PDF viewport coordinate resolution and text layer overlay. Clicking a verified quote calculates the page index, scrolls into view, and renders highlight rects over the matched text. DOCX viewer renders DOM ranges over virtual page paragraphs.
+- **Verified:** Browser coordinate alignment tests green.
+
+## F6 — Multi-document questions (complete)
+- **Built:** Multi-document chat sessions. Assigns aliases `D1`, `D2`, etc., in chat order, routes citations to respective documents, verifies quotes against the correct document text, rejects cross-document misattributions as `UNVERIFIED`.
+- **Verified:** 4/4 e2e multi-doc tests green.
+
+## F7 — Compare versions (complete)
+- **Built:** Version comparison engine using Needleman-Wunsch DP sequence alignment. Classifies changes as `MODIFIED`, `ADDED`, `REMOVED`, `MOVED`, `UNCHANGED`. Regex-based severity scoring (`HIGH`, `MEDIUM`, `LOW`) detecting currency, obligations, governing law, and numbers. Synthesizes renumbering notes and filters cosmetic punctuation. Side-by-side and inline visual diff UI with version picker.
+- **Verified:** 100% tests green in `comparison.service.test.ts`.
+
+## F8 — Tracked-change redlining (complete — Part C Option 1)
+- **Built:** OOXML redline domain engine. Parses Word document XML with `@xmldom/xmldom`, handles runs, preserves run properties (`w:rPr`), performs word-level diffing (`diffWordsWithSpace`), inserts `<w:del>` and `<w:ins>` tags with author `"Contract Analyzer"`, normalizes run children to protect tabs/breaks, and verifies changes with `simulateAccept` and `simulateReject`. Client UI with proposed edit review, accept/reject controls, and download redlined `.docx`.
+- **Verified:** 10/10 tests green in `redline.domain.test.ts` against `10-msa-v1.docx` and `14-msa-v1-with-existing-tracked-change.docx`.
+
+## F9 — Hardening and submission (complete)
+- **Built:** Typecheck and lint clean across all 3 packages (`@ca/shared`, `@ca/server`, `@ca/client`). Full unit and integration test suite passing (512 unit tests + 66 integration tests). Comprehensive `README.md` and `docs/SUBMISSION_NOTE.md` covering all assignment evaluation criteria.
+- **Verified:** Monorepo builds completely in Turbo, zero TypeScript errors, zero lint warnings.
+

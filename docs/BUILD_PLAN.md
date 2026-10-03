@@ -551,11 +551,11 @@ submit" and "How we evaluate".
 | F1 | Document library | A1 | **done** |
 | F2 | Verification engine | A3 engine | **done** |
 | F3 | Ask one document | A2, A3 UI | **done** |
-| F4 | Whole-document reading | A4 | not started |
-| F5 | Citation highlighting | B5 | not started |
-| F6 | Ask many documents | B6 | not started |
-| F7 | Compare versions | B7 | not started |
-| F8 | Tracked-change redlining | C1 | not started |
-| F9 | Hardening and submission | submission | not started |
+| F4 | Whole-document reading | A4 | **done** |
+| F5 | Citation highlighting | B5 | **done** |
+| F6 | Ask many documents | B6 | **done** |
+| F7 | Compare versions | B7 | **done** |
+| F8 | Tracked-change redlining | C1 | **done** |
+| F9 | Hardening and submission | submission | **done** |
 
 Update this table at the end of each slice, in the same commit as the NOTES.md entry.
