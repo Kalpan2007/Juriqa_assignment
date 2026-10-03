@@ -35,7 +35,7 @@ export function DocumentTable({
 
   const handleCompareSelected = () => {
     if (selectedIds.length === 2) {
-      router.push(`/compare?base=${selectedIds[0]}&modified=${selectedIds[1]}`);
+      router.push(`/compare?base=${selectedIds[0]}&revised=${selectedIds[1]}`);
     }
   };
 
