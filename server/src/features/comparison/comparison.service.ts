@@ -42,7 +42,14 @@ export class ComparisonService {
 
     if (cached !== null && cached.status === 'DONE' && cached.result) {
       this.logger.log({ comparisonId: cached.id }, 'Returning cached comparison');
-      return cached.result as unknown as ComparisonResultDto;
+      // `id` and `createdAt` are never stored inside the result JSON blob — they live only on
+      // the Prisma record. Inject them here so the response satisfies the shared schema.
+      const cachedPayload = cached.result as unknown as Omit<ComparisonResultDto, 'id' | 'createdAt'>;
+      return {
+        ...cachedPayload,
+        id: cached.id,
+        createdAt: cached.createdAt.toISOString(),
+      };
     }
 
     // Run clause segmentation
